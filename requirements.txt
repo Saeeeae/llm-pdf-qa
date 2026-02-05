@@ -1,0 +1,4 @@
+streamlit==1.31.0
+pypdf==4.0.1
+langchain-text-splitters==0.0.1
+requests==2.31.0

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # Linux GPU 환경용 vLLM 서버
+  vllm:
+    build:
+      context: .
+      dockerfile: Dockerfile.vllm
+    container_name: vllm-server
+    ports:
+      - "8000:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_HOME=/root/.cache/huggingface
+      - MODEL_NAME=Qwen/Qwen2.5-20B-Instruct
+    volumes:
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface  # 모델 캐시 공유
+      - ./models:/app/models  # 로컬 모델 디렉토리 마운트 (선택사항)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: '16gb'
+    restart: unless-stopped
+
+  # Streamlit 앱
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    container_name: streamlit-app
+    ports:
+      - "8501:8501"
+    environment:
+      - BACKEND=vllm
+      - VLLM_API_BASE=http://vllm:8000/v1
+      - MODEL_NAME=Qwen/Qwen2.5-20B-Instruct
+    depends_on:
+      - vllm
+    restart: unless-stopped
+
+networks:
+  default:
+    name: llm-network
