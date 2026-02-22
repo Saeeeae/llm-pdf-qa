@@ -1,0 +1,33 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# System dependencies for MinerU, OCR, and document processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-kor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install MinerU v2.x (separate step, heavier dependencies)
+RUN pip install -U "mineru[all]"
+
+EXPOSE 8000
+
+# Copy application code
+COPY app/ ./app/
+
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Default: run Celery worker
+CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "-Q", "default,ingest,sync", "--concurrency=2"]

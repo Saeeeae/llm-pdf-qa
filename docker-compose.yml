@@ -1,47 +1,125 @@
-version: '3.8'
-
 services:
-  # Linux GPU 환경용 vLLM 서버
-  vllm:
-    build:
-      context: .
-      dockerfile: Dockerfile.vllm
-    container_name: vllm-server
-    ports:
-      - "8000:8000"
+  postgres:
+    image: postgres:16
+    container_name: rag-postgres
     environment:
-      - CUDA_VISIBLE_DEVICES=0
-      - HF_HOME=/root/.cache/huggingface
-      - MODEL_NAME=Qwen/Qwen2.5-20B-Instruct
+      POSTGRES_DB: ${POSTGRES_DB:-rag_system}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "5432:5432"
     volumes:
-      - ${HOME}/.cache/huggingface:/root/.cache/huggingface  # 모델 캐시 공유
-      - ./models:/app/models  # 로컬 모델 디렉토리 마운트 (선택사항)
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    shm_size: '16gb'
+      - postgres_data:/var/lib/postgresql/data
+      - ./app/db/init_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  # Streamlit 앱
-  streamlit:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  api:
     build:
       context: .
-      dockerfile: Dockerfile.streamlit
-    container_name: streamlit-app
-    ports:
-      - "8501:8501"
+      dockerfile: Dockerfile.worker
+    container_name: rag-api
+    command: >
+      uvicorn app.api.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 2
+    env_file: .env
     environment:
-      - BACKEND=vllm
-      - VLLM_API_BASE=http://vllm:8000/v1
-      - MODEL_NAME=Qwen/Qwen2.5-20B-Instruct
+      - PYTHONPATH=/app
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ${DOC_WATCH_DIR:-./documents}:/data/documents
+      - hf_cache:/root/.cache/huggingface
+      - mineru_models:/root/.cache/mineru
     depends_on:
-      - vllm
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
     restart: unless-stopped
 
-networks:
-  default:
-    name: llm-network
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: rag-celery-worker
+    command: >
+      celery -A app.tasks.celery_app worker
+      --loglevel=info
+      -Q default,ingest,sync
+      --concurrency=2
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ${DOC_WATCH_DIR:-./documents}:/data/documents:ro
+      - hf_cache:/root/.cache/huggingface
+      - mineru_models:/root/.cache/mineru
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: rag-celery-beat
+    command: >
+      celery -A app.tasks.celery_app beat
+      --loglevel=info
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:
+  hf_cache:
+  mineru_models:

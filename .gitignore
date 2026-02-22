@@ -53,6 +53,9 @@ cache/
 # Docker
 *.log
 
+# Document watch directory
+documents/
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
