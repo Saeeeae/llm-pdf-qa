@@ -2,24 +2,14 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# System dependencies for MinerU, OCR, and document processing
+# Minimal system dependencies (Office document processing only)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    poppler-utils \
-    tesseract-ocr \
-    tesseract-ocr-kor \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies (no MinerU)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install MinerU v2.x (separate step, heavier dependencies)
-RUN pip install -U "mineru[all]"
 
 EXPOSE 8000
 

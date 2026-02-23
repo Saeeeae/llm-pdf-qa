@@ -9,7 +9,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_DIR:-/data/db/postgres}:/var/lib/postgresql/data
       - ./app/db/init_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
@@ -25,7 +25,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     volumes:
-      - qdrant_data:/qdrant/storage
+      - ${QDRANT_DATA_DIR:-/data/db/qdrant}:/qdrant/storage
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:6333/healthz || exit 1"]
       interval: 10s
@@ -39,11 +39,31 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - ${REDIS_DATA_DIR:-/data/db/redis}:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  mineru-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.mineru
+    container_name: rag-mineru-api
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - "9000:9000"
+    volumes:
+      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
+      - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
       retries: 3
     restart: unless-stopped
 
@@ -63,15 +83,16 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      - ${DOC_WATCH_DIR:-./documents}:/data/documents
-      - hf_cache:/root/.cache/huggingface
-      - mineru_models:/root/.cache/mineru
+      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents
+      - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      mineru-api:
         condition: service_healthy
     restart: unless-stopped
 
@@ -89,15 +110,16 @@ services:
     environment:
       - PYTHONPATH=/app
     volumes:
-      - ${DOC_WATCH_DIR:-./documents}:/data/documents:ro
-      - hf_cache:/root/.cache/huggingface
-      - mineru_models:/root/.cache/mineru
+      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
+      - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      mineru-api:
         condition: service_healthy
     restart: unless-stopped
 
@@ -116,10 +138,3 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
-
-volumes:
-  postgres_data:
-  qdrant_data:
-  redis_data:
-  hf_cache:
-  mineru_models:

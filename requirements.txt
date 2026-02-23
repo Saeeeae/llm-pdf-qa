@@ -25,6 +25,9 @@ sentence-transformers>=2.2.2
 transformers>=4.36
 torch>=2.1
 
+# HTTP Client (MinerU API 호출)
+httpx>=0.27
+
 # Configuration
 pydantic-settings>=2.0
 python-dotenv>=1.0

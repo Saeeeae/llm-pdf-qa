@@ -11,8 +11,18 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def _get_model() -> SentenceTransformer:
-    logger.info("Loading embedding model: %s (device=%s)", settings.embed_model, settings.embed_device)
-    return SentenceTransformer(settings.embed_model, device=settings.embed_device)
+    import os
+
+    # 로컬 마운트 경로에 모델이 있으면 우선 사용
+    local_path = settings.embedding_model_dir
+    if os.path.isdir(local_path) and os.listdir(local_path):
+        model_path = local_path
+        logger.info("Loading embedding model from local: %s (device=%s)", model_path, settings.embed_device)
+    else:
+        model_path = settings.embed_model
+        logger.info("Loading embedding model from HuggingFace: %s (device=%s)", model_path, settings.embed_device)
+
+    return SentenceTransformer(model_path, device=settings.embed_device)
 
 
 def embed_chunks(texts: list[str]) -> np.ndarray:

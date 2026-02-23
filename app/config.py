@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     qdrant_port: int = 6333
     qdrant_collection: str = "documents"
 
+    # Model paths (컨테이너 내 마운트 경로)
+    embedding_model_dir: str = "/models/embedding"
+    mineru_model_dir: str = "/models/mineru"
+    llm_model_dir: str = "/models/llm"
+    vlm_model_dir: str = "/models/vlm"
+
     # Embedding
     embed_model: str = "intfloat/multilingual-e5-large"
     embed_device: str = "cpu"
@@ -46,6 +52,7 @@ class Settings(BaseSettings):
     hf_token: Optional[str] = None
 
     # MinerU
+    mineru_api_url: str = "http://mineru-api:9000"
     mineru_backend: str = "pipeline"  # pipeline, hybrid-auto-engine, vlm-auto-engine
     mineru_lang: str = "korean"
 

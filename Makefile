@@ -1,4 +1,23 @@
-.PHONY: up down build init-db ingest sync status logs clean
+.PHONY: up down build init-db ingest sync status logs clean init download-models
+
+# === Setup ===
+
+init:
+	@echo "Creating /data directory structure..."
+	sudo mkdir -p /data/db/postgres /data/db/qdrant /data/db/redis
+	sudo mkdir -p /data/documents
+	sudo mkdir -p /data/models/embedding /data/models/mineru /data/models/llm /data/models/vlm
+	sudo chown -R $$(id -u):$$(id -g) /data
+	@echo "Done. Next: make download-models"
+
+download-models:
+	./scripts/download_models.sh all
+
+download-embedding:
+	./scripts/download_models.sh embedding
+
+download-mineru:
+	./scripts/download_models.sh mineru
 
 # === Docker Compose Commands ===
 
@@ -10,6 +29,12 @@ down:
 
 build:
 	docker compose build
+
+build-worker:
+	docker compose build api celery-worker celery-beat
+
+build-mineru:
+	docker compose build mineru-api
 
 # === Database ===
 
@@ -44,13 +69,16 @@ status:
 # === Monitoring ===
 
 logs:
-	docker compose logs -f api celery-worker celery-beat
+	docker compose logs -f api celery-worker celery-beat mineru-api
 
 logs-api:
 	docker compose logs -f api
 
 logs-worker:
 	docker compose logs -f celery-worker celery-beat
+
+logs-mineru:
+	docker compose logs -f mineru-api
 
 logs-all:
 	docker compose logs -f
@@ -62,4 +90,8 @@ ps:
 
 clean:
 	docker compose down -v
-	@echo "All volumes removed."
+	@echo "All containers stopped. Note: /data is preserved."
+
+clean-all:
+	docker compose down -v
+	@echo "WARNING: This does NOT delete /data. To remove: sudo rm -rf /data/db"

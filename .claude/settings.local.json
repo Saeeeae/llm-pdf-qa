@@ -3,7 +3,8 @@
     "allow": [
       "Bash(chmod:*)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nInitial commit: PDF Q&A system with vLLM\n\n- vLLM backend with Qwen2.5-20B-Instruct\n- Streamlit UI for PDF Q&A\n- Docker Compose setup\n- Model auto-download support\n- Chunked text processing with LangChain\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
