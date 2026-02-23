@@ -16,4 +16,10 @@ build
 !README.md
 .DS_Store
 .env
+.env.*
 *.log
+documents
+scripts
+.claude
+tmp
+*.sqlite3

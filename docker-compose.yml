@@ -51,6 +51,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mineru
+      args:
+        MINERU_PIP_SPEC: ${MINERU_PIP_SPEC:-mineru[all]}
     container_name: rag-mineru-api
     env_file: .env
     environment:
@@ -61,7 +63,7 @@ services:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
       - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9000/health || exit 1"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -70,7 +72,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.worker
+      dockerfile: Dockerfile.api
     container_name: rag-api
     command: >
       uvicorn app.api.main:app

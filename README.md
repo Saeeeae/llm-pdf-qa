@@ -338,9 +338,16 @@ llm_again/
 │       ├── ingest_tasks.py    # 비동기 인제스트
 │       └── sync_tasks.py      # 스케줄 동기화
 ├── docker-compose.yml         # 전체 서비스 정의
-├── Dockerfile.worker          # API + Worker 이미지
+├── Dockerfile.api             # API 이미지
+├── Dockerfile.worker          # Celery Worker/Beat 이미지
+├── Dockerfile.mineru          # MinerU 마이크로서비스 이미지
 ├── Makefile                   # 편의 명령어
-├── requirements.txt           # Python 의존성
+├── requirements/
+│   ├── api.txt                # API 의존성
+│   ├── worker.txt             # Worker 의존성
+│   ├── mineru.txt             # MinerU API 의존성
+│   └── base.txt               # 공통 의존성
+├── requirements.txt           # 로컬 설치용 엔트리포인트(api.txt 포함)
 └── .env.example               # 환경변수 템플릿
 ```
 
@@ -353,6 +360,9 @@ llm_again/
 | `make up` | 전체 서비스 시작 |
 | `make down` | 서비스 중지 |
 | `make build` | Docker 이미지 빌드 |
+| `make build-api` | API 이미지 빌드 |
+| `make build-worker` | Worker/Beat 이미지 빌드 |
+| `make build-mineru` | MinerU 이미지 빌드 |
 | `make init-db` | DB 스키마 재초기화 |
 | `make scan` | 처리 가능한 파일 목록 조회 |
 | `make scan-pdf` | PDF 파일만 조회 |
@@ -418,6 +428,7 @@ Docker Desktop → Settings → Resources → Memory → 8GB 이상
 | `EMBED_BATCH_SIZE` | `32` | 배치 크기 |
 | `MINERU_BACKEND` | `pipeline` | MinerU 백엔드 |
 | `MINERU_LANG` | `korean` | OCR 언어 |
+| `MINERU_PIP_SPEC` | `mineru[all]` | MinerU 설치 스펙 (이미지 경량화 시 조정) |
 | `API_HOST` | `0.0.0.0` | FastAPI 호스트 |
 | `API_PORT` | `8000` | FastAPI 포트 |
 | `CELERY_BROKER_URL` | `redis://redis:6379/0` | Celery 브로커 |

@@ -2,33 +2,36 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+ARG MINERU_PIP_SPEC="mineru[all]"
+
 # System dependencies for MinerU (OCR, PDF processing, OpenCV)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     poppler-utils \
     tesseract-ocr \
     tesseract-ocr-kor \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MinerU + lightweight API deps
-RUN pip install --no-cache-dir \
-    "mineru[all]" \
-    fastapi>=0.110 \
-    uvicorn[standard]>=0.27
+COPY requirements/ ./requirements/
+RUN pip install --no-cache-dir "$MINERU_PIP_SPEC" \
+    && pip install --no-cache-dir -r requirements/mineru.txt
 
 COPY app/mineru_api.py ./app/mineru_api.py
 
 ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
 
 EXPOSE 9000
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:9000/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"
 
 CMD ["uvicorn", "app.mineru_api:app", "--host", "0.0.0.0", "--port", "9000", "--workers", "1"]

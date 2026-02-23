@@ -1,4 +1,5 @@
 import logging
+from functools import lru_cache
 
 import httpx
 
@@ -8,12 +9,18 @@ from app.parsers.base import BaseParser, ParseResult, ParsedPage
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=1)
+def _get_http_client() -> httpx.Client:
+    # Reuse keep-alive connections to reduce per-request overhead.
+    return httpx.Client()
+
+
 class ImageParser(BaseParser):
     SUPPORTED_EXTENSIONS = [".png", ".jpg", ".jpeg", ".tif", ".tiff"]
 
     def parse(self, file_path: str) -> ParseResult:
         """Parse image by calling MinerU API service (OCR mode)."""
-        response = httpx.post(
+        response = _get_http_client().post(
             f"{settings.mineru_api_url}/parse",
             json={
                 "file_path": file_path,

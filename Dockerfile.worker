@@ -2,14 +2,13 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# Minimal system dependencies (Office document processing only)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
 
 # Install Python dependencies (no MinerU)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements/ ./requirements/
+RUN pip install --no-cache-dir -r requirements/worker.txt
 
 EXPOSE 8000
 
@@ -17,7 +16,6 @@ EXPOSE 8000
 COPY app/ ./app/
 
 ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
 
 # Default: run Celery worker
 CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "-Q", "default,ingest,sync", "--concurrency=2"]

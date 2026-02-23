@@ -1,33 +1,3 @@
-# API
-fastapi>=0.110
-uvicorn[standard]>=0.27
-python-multipart>=0.0.6
-
-# Database
-sqlalchemy>=2.0
-psycopg2-binary>=2.9
-qdrant-client>=1.7
-
-# Task Queue
-celery[redis]>=5.3
-redis>=5.0
-
-# Document Parsing (Office)
-python-docx>=1.1
-openpyxl>=3.1
-python-pptx>=0.6
-
-# Text Processing
-langchain-text-splitters>=0.0.1
-
-# Embedding
-sentence-transformers>=2.2.2
-transformers>=4.36
-torch>=2.1
-
-# HTTP Client (MinerU API 호출)
-httpx>=0.27
-
-# Configuration
-pydantic-settings>=2.0
-python-dotenv>=1.0
+# Backward-compatible entrypoint for local installs.
+# API image uses requirements/api.txt, worker image uses requirements/worker.txt.
+-r requirements/api.txt

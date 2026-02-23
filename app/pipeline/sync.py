@@ -6,16 +6,17 @@ from app.config import settings
 from app.db.models import Document, DocChunk, SystemJob
 from app.db.postgres import get_session
 from app.db.qdrant import QdrantManager
+from app.pipeline.ingest import compute_file_hash
 from app.pipeline.ingest import ingest_document
 from app.pipeline.scanner import scan_files
 
 logger = logging.getLogger(__name__)
 
 
-def scan_directory(watch_dir: str) -> dict[str, str]:
-    """Scan directory recursively. Returns {absolute_path: sha256_hash}."""
-    result = scan_files(watch_dir, recursive=True, compute_hash=True)
-    return {f.path: f.hash for f in result.files}
+def scan_directory(watch_dir: str) -> dict[str, int]:
+    """Scan directory recursively. Returns {absolute_path: file_size_bytes}."""
+    result = scan_files(watch_dir, recursive=True, compute_hash=False)
+    return {f.path: f.size for f in result.files}
 
 
 def run_sync() -> dict:
@@ -32,6 +33,7 @@ def run_sync() -> dict:
 
     disk_files = scan_directory(watch_dir)
     logger.info("Found %d files on disk", len(disk_files))
+    qdrant = QdrantManager()
 
     stats = {"new": 0, "modified": 0, "deleted": 0, "unchanged": 0, "errors": 0}
 
@@ -55,7 +57,7 @@ def run_sync() -> dict:
         db_map: dict[str, Document] = {doc.path: doc for doc in db_docs}
 
         # 1. Process NEW and MODIFIED files
-        for abs_path, file_hash in disk_files.items():
+        for abs_path, file_size in disk_files.items():
             if abs_path not in db_map:
                 # NEW file
                 try:
@@ -65,25 +67,44 @@ def run_sync() -> dict:
                 except Exception as e:
                     stats["errors"] += 1
                     logger.error("Error ingesting new file %s: %s", abs_path, e)
-            elif db_map[abs_path].hash != file_hash:
-                # MODIFIED file - delete old data, re-ingest
+            elif db_map[abs_path].size != file_size:
+                # MODIFIED file (size changed) - delete old data, re-ingest
                 old_doc = db_map[abs_path]
                 try:
-                    _delete_document_data(session, old_doc)
+                    _delete_document_data(session, old_doc, qdrant=qdrant)
                     ingest_document(abs_path)
                     stats["modified"] += 1
-                    logger.info("Modified file re-ingested: %s", abs_path)
+                    logger.info("Modified file re-ingested (size changed): %s", abs_path)
                 except Exception as e:
                     stats["errors"] += 1
                     logger.error("Error re-ingesting modified file %s: %s", abs_path, e)
             else:
-                stats["unchanged"] += 1
+                # Same path and same size: compute hash only now.
+                try:
+                    current_hash = compute_file_hash(abs_path)
+                except Exception as e:
+                    stats["errors"] += 1
+                    logger.error("Error hashing file %s: %s", abs_path, e)
+                    continue
+
+                if db_map[abs_path].hash != current_hash:
+                    old_doc = db_map[abs_path]
+                    try:
+                        _delete_document_data(session, old_doc, qdrant=qdrant)
+                        ingest_document(abs_path)
+                        stats["modified"] += 1
+                        logger.info("Modified file re-ingested (same size): %s", abs_path)
+                    except Exception as e:
+                        stats["errors"] += 1
+                        logger.error("Error re-ingesting modified file %s: %s", abs_path, e)
+                else:
+                    stats["unchanged"] += 1
 
         # 2. Find DELETED files (in DB but not on disk)
         for abs_path, doc in db_map.items():
             if abs_path not in disk_files:
                 try:
-                    _delete_document_data(session, doc)
+                    _delete_document_data(session, doc, qdrant=qdrant)
                     stats["deleted"] += 1
                     logger.info("Deleted file cleaned up: %s", abs_path)
                 except Exception as e:
@@ -98,11 +119,10 @@ def run_sync() -> dict:
     return stats
 
 
-def _delete_document_data(session, doc: Document):
+def _delete_document_data(session, doc: Document, qdrant: QdrantManager | None = None):
     """Remove chunks from Qdrant and delete document record."""
     try:
-        qdrant = QdrantManager()
-        qdrant.delete_by_doc_id(doc.doc_id)
+        (qdrant or QdrantManager()).delete_by_doc_id(doc.doc_id)
     except Exception as e:
         logger.warning("Failed to delete vectors from Qdrant for doc_id=%d: %s", doc.doc_id, e)
 

@@ -30,8 +30,11 @@ down:
 build:
 	docker compose build
 
+build-api:
+	docker compose build api
+
 build-worker:
-	docker compose build api celery-worker celery-beat
+	docker compose build celery-worker celery-beat
 
 build-mineru:
 	docker compose build mineru-api
