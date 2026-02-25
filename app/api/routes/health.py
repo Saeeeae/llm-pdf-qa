@@ -1,7 +1,6 @@
 import logging
 
 from fastapi import APIRouter
-from qdrant_client import QdrantClient
 from sqlalchemy import text
 
 from app.config import settings
@@ -16,22 +15,16 @@ def health_check():
     """전체 시스템 상태 확인."""
     status = {"status": "ok", "services": {}}
 
-    # PostgreSQL
+    # PostgreSQL + pgvector
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        status["services"]["postgres"] = "healthy"
+            # pgvector extension 확인
+            result = conn.execute(text("SELECT extversion FROM pg_extension WHERE extname = 'vector'"))
+            row = result.fetchone()
+            status["services"]["postgres"] = f"healthy (pgvector {row[0]})" if row else "healthy (pgvector not installed)"
     except Exception as e:
         status["services"]["postgres"] = f"unhealthy: {e}"
-        status["status"] = "degraded"
-
-    # Qdrant
-    try:
-        client = QdrantClient(host=settings.qdrant_host, port=settings.qdrant_port, timeout=5)
-        client.get_collections()
-        status["services"]["qdrant"] = "healthy"
-    except Exception as e:
-        status["services"]["qdrant"] = f"unhealthy: {e}"
         status["status"] = "degraded"
 
     # Redis

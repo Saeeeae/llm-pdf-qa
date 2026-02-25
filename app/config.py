@@ -20,11 +20,6 @@ class Settings(BaseSettings):
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
 
-    # Qdrant
-    qdrant_host: str = "qdrant"
-    qdrant_port: int = 6333
-    qdrant_collection: str = "documents"
-
     # Model paths (컨테이너 내 마운트 경로)
     embedding_model_dir: str = "/models/embedding"
     mineru_model_dir: str = "/models/mineru"
@@ -53,7 +48,7 @@ class Settings(BaseSettings):
 
     # MinerU
     mineru_api_url: str = "http://mineru-api:9000"
-    mineru_backend: str = "pipeline"  # pipeline, hybrid-auto-engine, vlm-auto-engine
+    mineru_backend: str = "hybrid-auto-engine"  # pipeline (CPU), hybrid-auto-engine (pipeline+VLM), vlm-auto-engine (VLM only)
     mineru_lang: str = "korean"
 
     # Chunking

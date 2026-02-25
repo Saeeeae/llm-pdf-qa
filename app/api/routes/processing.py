@@ -191,7 +191,7 @@ async def embed_document(
 
 @router.post("/full-pipeline", response_model=FullPipelineResponse)
 async def full_pipeline(file: UploadFile = File(...)):
-    """파일 업로드 → 파싱 → 청킹 → 임베딩 → PostgreSQL + Qdrant 저장.
+    """파일 업로드 → 파싱 → 청킹 → 임베딩 → PostgreSQL 저장 (벡터 포함).
 
     전체 파이프라인을 동기적으로 실행하여 결과를 바로 반환.
     """
@@ -229,20 +229,19 @@ async def full_pipeline(file: UploadFile = File(...)):
 
 @router.post("/search", response_model=list[SearchResult])
 def search_vectors(request: SearchRequest):
-    """쿼리 텍스트로 벡터 유사도 검색."""
-    from app.db.qdrant import QdrantManager
+    """쿼리 텍스트로 벡터 유사도 검색 (pgvector cosine similarity)."""
+    from app.db.vector_store import search_similar
 
     query_vector = embed_query(request.query)
-    qdrant = QdrantManager()
-    results = qdrant.search(vector=query_vector.tolist(), limit=request.limit)
+    results = search_similar(vector=query_vector.tolist(), limit=request.limit)
 
     return [
         SearchResult(
-            score=r.score,
-            doc_id=r.payload.get("doc_id", 0),
-            chunk_idx=r.payload.get("chunk_idx", 0),
-            text=r.payload.get("text", ""),
-            file_name=r.payload.get("file_name", ""),
+            score=r["score"],
+            doc_id=r["doc_id"],
+            chunk_idx=r["chunk_idx"],
+            text=r["text"],
+            file_name=r["file_name"],
         )
         for r in results
     ]

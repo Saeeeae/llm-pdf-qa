@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from app.config import settings
 from app.db.models import Document, DocChunk, SystemJob
 from app.db.postgres import get_session
-from app.db.qdrant import QdrantManager
 from app.pipeline.ingest import compute_file_hash
 from app.pipeline.ingest import ingest_document
 from app.pipeline.scanner import scan_files
@@ -33,7 +32,6 @@ def run_sync() -> dict:
 
     disk_files = scan_directory(watch_dir)
     logger.info("Found %d files on disk", len(disk_files))
-    qdrant = QdrantManager()
 
     stats = {"new": 0, "modified": 0, "deleted": 0, "unchanged": 0, "errors": 0}
 
@@ -71,7 +69,7 @@ def run_sync() -> dict:
                 # MODIFIED file (size changed) - delete old data, re-ingest
                 old_doc = db_map[abs_path]
                 try:
-                    _delete_document_data(session, old_doc, qdrant=qdrant)
+                    _delete_document_data(session, old_doc)
                     ingest_document(abs_path)
                     stats["modified"] += 1
                     logger.info("Modified file re-ingested (size changed): %s", abs_path)
@@ -90,7 +88,7 @@ def run_sync() -> dict:
                 if db_map[abs_path].hash != current_hash:
                     old_doc = db_map[abs_path]
                     try:
-                        _delete_document_data(session, old_doc, qdrant=qdrant)
+                        _delete_document_data(session, old_doc)
                         ingest_document(abs_path)
                         stats["modified"] += 1
                         logger.info("Modified file re-ingested (same size): %s", abs_path)
@@ -104,7 +102,7 @@ def run_sync() -> dict:
         for abs_path, doc in db_map.items():
             if abs_path not in disk_files:
                 try:
-                    _delete_document_data(session, doc, qdrant=qdrant)
+                    _delete_document_data(session, doc)
                     stats["deleted"] += 1
                     logger.info("Deleted file cleaned up: %s", abs_path)
                 except Exception as e:
@@ -119,13 +117,8 @@ def run_sync() -> dict:
     return stats
 
 
-def _delete_document_data(session, doc: Document, qdrant: QdrantManager | None = None):
-    """Remove chunks from Qdrant and delete document record."""
-    try:
-        (qdrant or QdrantManager()).delete_by_doc_id(doc.doc_id)
-    except Exception as e:
-        logger.warning("Failed to delete vectors from Qdrant for doc_id=%d: %s", doc.doc_id, e)
-
+def _delete_document_data(session, doc: Document):
+    """Delete document and its chunks (CASCADE deletes chunks + vectors)."""
     session.query(DocChunk).filter(DocChunk.doc_id == doc.doc_id).delete()
     session.delete(doc)
     logger.info("Deleted document data: doc_id=%d, file=%s", doc.doc_id, doc.file_name)

@@ -5,6 +5,7 @@
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- =============================================================================
 -- 1. Department - Hierarchical organization structure
@@ -193,14 +194,17 @@ CREATE TABLE IF NOT EXISTS doc_chunk (
     content TEXT NOT NULL,
     token_cnt INTEGER DEFAULT 0,
     page_number INTEGER,
-    qdrant_id VARCHAR(64),
+    embedding vector(1024),
     embed_model VARCHAR(100),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_doc_chunk_doc ON doc_chunk(doc_id, chunk_idx);
-CREATE INDEX IF NOT EXISTS idx_doc_chunk_qdrant ON doc_chunk(qdrant_id);
+
+-- HNSW index for fast cosine similarity search
+CREATE INDEX IF NOT EXISTS idx_doc_chunk_embedding ON doc_chunk
+    USING hnsw (embedding vector_cosine_ops);
 
 -- =============================================================================
 -- 13. Chat Message

@@ -12,9 +12,9 @@ RUN sed -i 's|deb.debian.org|mirror.kakao.com|g' /etc/apt/sources.list.d/debian.
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (torch cu124 + HuggingFace + base)
+# Install Python dependencies (base only — no torch needed for scheduling)
 COPY requirements/ ./requirements/
-RUN pip install --no-cache-dir -r requirements/worker.txt \
+RUN pip install --no-cache-dir -r requirements/beat.txt \
     && find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
     find /usr/local/lib/python3.10 -name "*.pyc" -delete 2>/dev/null; \
     rm -rf /root/.cache /tmp/*
@@ -28,12 +28,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 
-# Kakao apt mirror
-RUN sed -i 's|deb.debian.org|mirror.kakao.com|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update && apt-get install -y --no-install-recommends \
-        libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
@@ -41,4 +35,4 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY app/ ./app/
 
-CMD ["celery", "-A", "app.tasks.celery_app", "worker", "--loglevel=info", "-Q", "default,ingest,sync", "--concurrency=2"]
+CMD ["celery", "-A", "app.tasks.celery_app", "beat", "--loglevel=info"]

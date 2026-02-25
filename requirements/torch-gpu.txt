@@ -1,0 +1,9 @@
+# PyTorch CUDA 12.4 (GPU)
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+
+# HuggingFace stack
+huggingface-hub==0.28.1
+tokenizers==0.21.1
+transformers==4.49.0
+sentence-transformers==3.4.1

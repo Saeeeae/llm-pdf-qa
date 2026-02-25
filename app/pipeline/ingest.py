@@ -1,14 +1,10 @@
 import hashlib
 import logging
-import uuid
 from pathlib import Path
-
-from qdrant_client.models import PointStruct
 
 from app.config import settings
 from app.db.models import Document, DocChunk
 from app.db.postgres import get_session
-from app.db.qdrant import QdrantManager
 from app.parsers import get_parser
 from app.processing.chunker import chunk_text
 from app.processing.embedder import embed_chunks
@@ -81,26 +77,9 @@ def ingest_document(
             embeddings = embed_chunks(texts)
             logger.info("Embedded %d chunks for %s", len(chunks), path.name)
 
-            # 4. Store in Qdrant + PostgreSQL
-            qdrant = QdrantManager()
-            points = []
+            # 4. Store in PostgreSQL (chunks + vectors in same table)
             chunk_records = []
-
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                qdrant_id = str(uuid.uuid4())
-                points.append(
-                    PointStruct(
-                        id=qdrant_id,
-                        vector=embedding.tolist(),
-                        payload={
-                            "doc_id": doc_id,
-                            "chunk_idx": chunk["chunk_idx"],
-                            "text": chunk["text"][:500],
-                            "file_name": path.name,
-                            "file_type": file_type,
-                        },
-                    )
-                )
+            for chunk, embedding in zip(chunks, embeddings):
                 chunk_records.append(
                     DocChunk(
                         doc_id=doc_id,
@@ -108,12 +87,11 @@ def ingest_document(
                         content=chunk["text"],
                         token_cnt=chunk["token_cnt"],
                         page_number=_find_page_for_chunk(result, chunk["text"]),
-                        qdrant_id=qdrant_id,
+                        embedding=embedding.tolist(),
                         embed_model=settings.embed_model,
                     )
                 )
 
-            qdrant.upsert_vectors(points)
             session.add_all(chunk_records)
 
             doc.status = "indexed"

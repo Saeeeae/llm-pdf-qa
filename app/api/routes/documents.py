@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 from app.db.models import Document, DocChunk
 from app.db.postgres import get_session
-from app.db.qdrant import QdrantManager
 from app.pipeline.scanner import scan_files, scan_and_ingest
 from app.pipeline.sync import run_sync
 from app.tasks.ingest_tasks import ingest_file
@@ -46,7 +45,7 @@ class ChunkResponse(BaseModel):
     content: str
     token_cnt: int
     page_number: Optional[int]
-    qdrant_id: Optional[str]
+    has_embedding: bool
 
     class Config:
         from_attributes = True
@@ -144,7 +143,7 @@ def get_document(doc_id: int):
                     content=c.content,
                     token_cnt=c.token_cnt,
                     page_number=c.page_number,
-                    qdrant_id=c.qdrant_id,
+                    has_embedding=c.embedding is not None,
                 )
                 for c in chunks
             ],
@@ -174,20 +173,13 @@ def sync_documents():
 
 @router.delete("/{doc_id}")
 def delete_document(doc_id: int):
-    """문서 및 관련 청크/벡터 삭제."""
+    """문서 및 관련 청크(벡터 포함) 삭제."""
     with get_session() as session:
         doc = session.query(Document).filter(Document.doc_id == doc_id).first()
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        # Qdrant에서 벡터 삭제
-        try:
-            qdrant = QdrantManager()
-            qdrant.delete_by_doc_id(doc_id)
-        except Exception as e:
-            logger.warning("Failed to delete vectors from Qdrant: %s", e)
-
-        # PostgreSQL에서 청크 + 문서 삭제
+        # CASCADE로 청크(+벡터) 삭제
         session.query(DocChunk).filter(DocChunk.doc_id == doc_id).delete()
         session.delete(doc)
 
@@ -202,10 +194,7 @@ def scan_directory(
     recursive: bool = Query(True, description="하위 디렉토리 포함"),
     compute_hash: bool = Query(False, description="SHA-256 해시 계산 (느릴 수 있음)"),
 ):
-    """디렉토리 스캔 - 처리 가능한 파일 목록 조회.
-
-    glob 패턴으로 특정 파일만 필터링 가능.
-    """
+    """디렉토리 스캔 - 처리 가능한 파일 목록 조회."""
     from app.config import settings
 
     scan_dir = directory or settings.doc_watch_dir
@@ -246,10 +235,7 @@ def scan_and_ingest_endpoint(
     extensions: str = Query(None, description="확장자 필터 (쉼표 구분: pdf,docx)"),
     recursive: bool = Query(True),
 ):
-    """디렉토리 스캔 → 전체 파일 인제스트.
-
-    특정 패턴의 파일만 골라서 일괄 처리 가능.
-    """
+    """디렉토리 스캔 → 전체 파일 인제스트."""
     from app.config import settings
 
     scan_dir = directory or settings.doc_watch_dir

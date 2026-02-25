@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10-slim AS builder
 
 WORKDIR /app
 
@@ -8,26 +8,51 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 ARG MINERU_PIP_SPEC="mineru[all]"
 
-# System dependencies for MinerU (OCR, PDF processing, OpenCV)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
-    poppler-utils \
-    tesseract-ocr \
-    tesseract-ocr-kor \
+# Kakao apt mirror (한국) + build deps
+RUN sed -i 's|deb.debian.org|mirror.kakao.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install MinerU + lightweight API deps
+# Install MinerU + API deps
 COPY requirements/ ./requirements/
 RUN pip install --no-cache-dir "$MINERU_PIP_SPEC" \
-    && pip install --no-cache-dir -r requirements/mineru.txt
+    && pip install --no-cache-dir -r requirements/mineru.txt \
+    && find /usr/local/lib/python3.10 -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
+    find /usr/local/lib/python3.10 -name "*.pyc" -delete 2>/dev/null; \
+    find /usr/local/lib/python3.10 -name "*.pth" -path "*/nvidia/*" -delete 2>/dev/null; \
+    rm -rf /root/.cache /tmp/*
+
+# --- Runtime stage ---
+FROM python:3.10-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# Kakao apt mirror + runtime deps
+RUN sed -i 's|deb.debian.org|mirror.kakao.com|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-glx \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-kor \
+        libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed packages from builder
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY app/mineru_api.py ./app/mineru_api.py
-
-ENV PYTHONPATH=/app
 
 EXPOSE 9000
 

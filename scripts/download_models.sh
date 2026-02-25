@@ -43,16 +43,15 @@ download_mineru() {
     echo "=== Downloading MinerU models ==="
     mkdir -p "${MINERU_MODEL_DIR}"
 
-    # MinerU 모델 다운로드 (magic-pdf-models)
     if ! command -v huggingface-cli &> /dev/null; then
         echo "Installing huggingface-cli..."
         pip install -q huggingface_hub[cli]
     fi
 
-    # MinerU v2.x uses these models
-    echo "Downloading MinerU layout models..."
-    huggingface-cli download opendatalab/PDF-Extract-Kit-1.0 \
-        --local-dir "${MINERU_MODEL_DIR}/PDF-Extract-Kit-1.0" \
+    # MinerU 2.5 VLM model (1.2B)
+    echo "Downloading MinerU 2.5 model..."
+    huggingface-cli download opendatalab/MinerU2.5-2509-1.2B \
+        --local-dir "${MINERU_MODEL_DIR}/MinerU2.5-2509-1.2B" \
         --local-dir-use-symlinks False
 
     echo "MinerU models saved to: ${MINERU_MODEL_DIR}"
@@ -61,7 +60,6 @@ download_mineru() {
 init_dirs() {
     echo "=== Creating directory structure ==="
     mkdir -p /data/db/postgres
-    mkdir -p /data/db/qdrant
     mkdir -p /data/db/redis
     mkdir -p /data/documents
     mkdir -p "${EMBEDDING_MODEL_DIR}"

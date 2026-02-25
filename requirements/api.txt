@@ -1,6 +1,7 @@
 -r base.txt
+-r torch-gpu.txt
 
 # API
-fastapi>=0.110,<1
-uvicorn[standard]>=0.27,<1
-python-multipart>=0.0.6,<1
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Column, Integer, String, Text, BigInteger, Boolean, Float,
     ForeignKey, DateTime, JSON,
@@ -89,7 +90,7 @@ class DocChunk(Base):
     content = Column(Text, nullable=False)
     token_cnt = Column(Integer, default=0)
     page_number = Column(Integer)
-    qdrant_id = Column(String(64))
+    embedding = Column(Vector(1024))
     embed_model = Column(String(100))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

@@ -1,10 +1,10 @@
-.PHONY: up down build init-db ingest sync status logs clean init download-models
+.PHONY: up down build init-db ingest sync status logs clean init download-models build-beat
 
 # === Setup ===
 
 init:
 	@echo "Creating /data directory structure..."
-	sudo mkdir -p /data/db/postgres /data/db/qdrant /data/db/redis
+	sudo mkdir -p /data/db/postgres /data/db/redis
 	sudo mkdir -p /data/documents
 	sudo mkdir -p /data/models/embedding /data/models/mineru /data/models/llm /data/models/vlm
 	sudo chown -R $$(id -u):$$(id -g) /data
@@ -34,7 +34,10 @@ build-api:
 	docker compose build api
 
 build-worker:
-	docker compose build celery-worker celery-beat
+	docker compose build celery-worker
+
+build-beat:
+	docker compose build celery-beat
 
 build-mineru:
 	docker compose build mineru-api
