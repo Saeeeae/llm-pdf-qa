@@ -52,8 +52,16 @@ class Settings(BaseSettings):
     mineru_lang: str = "korean"
 
     # Chunking
+    chunk_strategy: str = "hybrid"  # hybrid | token
     chunk_size: int = 512
     chunk_overlap: int = 50
+    chunk_min_section_tokens: int = 80
+
+    # Image & VLM
+    enable_image_embedding: bool = True
+    vlm_api_url: str = "http://localhost:8001/v1"
+    vlm_model_name: str = "Qwen3.5"
+    image_store_dir: str = "/data/images"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

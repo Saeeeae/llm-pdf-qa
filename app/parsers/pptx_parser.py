@@ -5,7 +5,7 @@ from pathlib import Path
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-from app.parsers.base import BaseParser, ParseResult, ParsedPage
+from app.parsers.base import BaseParser, ParseResult, ParsedPage, ExtractedImage
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ class PptxParser(BaseParser):
 
     def parse(self, file_path: str) -> ParseResult:
         prs = Presentation(file_path)
+        self._extracted_images = []
         pages = []
         all_texts = []
 
@@ -66,6 +67,7 @@ class PptxParser(BaseParser):
                 "source": file_path,
                 "slide_count": len(prs.slides),
             },
+            images=self._extracted_images,  # NEW
         )
 
     def _table_to_markdown(self, table) -> str:
@@ -94,19 +96,23 @@ class PptxParser(BaseParser):
         try:
             image = shape.image
             blob = image.blob
+            ext = image.content_type.split('/')[-1]
 
-            with tempfile.NamedTemporaryFile(
-                suffix=f".{image.content_type.split('/')[-1]}",
-                delete=False,
-            ) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
                 tmp.write(blob)
                 tmp_path = tmp.name
+
+            self._extracted_images.append(ExtractedImage(
+                temp_path=tmp_path,
+                page_num=slide_num,
+                image_type=ext,
+            ))
 
             from app.parsers.image_parser import ImageParser
 
             parser = ImageParser()
             result = parser.parse(tmp_path)
-            Path(tmp_path).unlink(missing_ok=True)
+            # Don't unlink - the ingest pipeline will move it
 
             if result.raw_text.strip():
                 return result.raw_text.strip()

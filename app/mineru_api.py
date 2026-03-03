@@ -6,7 +6,7 @@ Called by the main worker via HTTP instead of importing MinerU directly.
 
 import logging
 import os
-import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -23,6 +23,7 @@ app = FastAPI(title="MinerU Parsing API", version="1.0.0")
 # Configuration from environment
 MINERU_BACKEND = os.environ.get("MINERU_BACKEND", "pipeline")
 MINERU_LANG = os.environ.get("MINERU_LANG", "korean")
+MINERU_OUTPUT_DIR = os.environ.get("MINERU_OUTPUT_DIR", "/tmp/mineru_output")
 
 
 class ParseRequest(BaseModel):
@@ -37,6 +38,7 @@ class ParseResponse(BaseModel):
     total_pages: int
     pages: list[dict]  # [{"page_num": 1, "text": "..."}, ...]
     metadata: dict
+    images: list[dict] = []  # NEW
 
 
 @app.get("/health")
@@ -61,25 +63,32 @@ def parse_document(req: ParseRequest):
     logger.info("Parsing %s (method=%s, backend=%s, lang=%s)", file_path, method, backend, lang)
 
     try:
-        md_text, pages = _parse_with_mineru(file_path, method, backend, lang)
+        md_text, pages, images = _parse_with_mineru(file_path, method, backend, lang)
     except Exception as e:
         logger.error("MinerU parsing failed for %s: %s", file_path, e)
         raise HTTPException(status_code=500, detail=f"Parsing failed: {str(e)[:500]}")
+
+    output_dir = os.path.join(
+        MINERU_OUTPUT_DIR,
+        f"{Path(file_path).stem}_last",
+    )
 
     return ParseResponse(
         markdown=md_text,
         total_pages=len(pages),
         pages=[{"page_num": p["page_num"], "text": p["text"]} for p in pages],
+        images=images,
         metadata={
             "parser": "mineru-ocr" if method == "ocr" else "mineru",
             "backend": backend,
             "source": file_path,
+            "mineru_output_dir": output_dir,
         },
     )
 
 
-def _parse_with_mineru(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict]]:
-    """Run MinerU and return (full_markdown, pages_list)."""
+def _parse_with_mineru(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict]]:
+    """Run MinerU and return (full_markdown, pages_list, images_list)."""
     try:
         return _parse_via_api(file_path, method, backend, lang)
     except ImportError:
@@ -87,45 +96,49 @@ def _parse_with_mineru(file_path: str, method: str, backend: str, lang: str) -> 
         return _parse_via_cli(file_path, method, backend, lang)
 
 
-def _parse_via_api(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict]]:
+def _parse_via_api(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict]]:
     """Use MinerU Python API directly."""
     from mineru.demo.demo import parse_doc
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        parse_doc(
-            path_list=[Path(file_path)],
-            output_dir=tmpdir,
-            lang=lang,
-            backend=backend,
-            method=method,
-        )
-        return _read_output(file_path, tmpdir)
+    output_dir = os.path.join(MINERU_OUTPUT_DIR, f"{Path(file_path).stem}_{uuid.uuid4().hex[:8]}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    parse_doc(
+        path_list=[Path(file_path)],
+        output_dir=output_dir,
+        lang=lang,
+        backend=backend,
+        method=method,
+    )
+    return _read_output(file_path, output_dir)
 
 
-def _parse_via_cli(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict]]:
+def _parse_via_cli(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict]]:
     """Fallback: use MinerU CLI."""
     import subprocess
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        result = subprocess.run(
-            [
-                "mineru",
-                "-p", file_path,
-                "-o", tmpdir,
-                "-m", method,
-                "-b", backend,
-                "-l", lang,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"MinerU CLI failed: {result.stderr[:500]}")
-        return _read_output(file_path, tmpdir)
+    output_dir = os.path.join(MINERU_OUTPUT_DIR, f"{Path(file_path).stem}_{uuid.uuid4().hex[:8]}")
+    os.makedirs(output_dir, exist_ok=True)
+
+    result = subprocess.run(
+        [
+            "mineru",
+            "-p", file_path,
+            "-o", output_dir,
+            "-m", method,
+            "-b", backend,
+            "-l", lang,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"MinerU CLI failed: {result.stderr[:500]}")
+    return _read_output(file_path, output_dir)
 
 
-def _read_output(file_path: str, output_dir: str) -> tuple[str, list[dict]]:
+def _read_output(file_path: str, output_dir: str) -> tuple[str, list[dict], list[dict]]:
     """Read markdown output from MinerU output directory."""
     stem = Path(file_path).stem
     output_path = Path(output_dir)
@@ -163,4 +176,15 @@ def _read_output(file_path: str, output_dir: str) -> tuple[str, list[dict]]:
         if text.strip()
     ]
 
-    return md_text, pages
+    # NEW: collect images from images/ directory
+    images = []
+    images_dir = md_path.parent / "images"
+    if images_dir.is_dir():
+        for img_file in sorted(images_dir.iterdir()):
+            if img_file.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'):
+                images.append({
+                    "path": str(img_file),
+                    "filename": img_file.name,
+                })
+
+    return md_text, pages, images

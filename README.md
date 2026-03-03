@@ -27,7 +27,7 @@ PostgreSQL(청크 DB) + Qdrant(벡터 DB)에 저장하는 온프레미스 전처
               ▼                    ▼                     ▼
     ┌──────────────┐    ┌──────────────┐      ┌──────────────┐
     │  MinerU v2.x │    │   Chunker    │      │   Embedder   │
-    │  (OCR/PDF)   │    │  (512 tokens)│      │ (E5-large)   │
+    │  (OCR/PDF)   │    │ (Hybrid: 구조+토큰) │      │ (E5-large)   │
     └──────┬───────┘    └──────┬───────┘      └──────┬───────┘
            └───────────┬───────┘                     │
                        ▼                             ▼
@@ -301,6 +301,34 @@ SYNC_CRON_MINUTE=0
 
 ---
 
+## Hybrid Chunking 적용 순서
+
+`chunking` 전략을 `hybrid`로 전환할 때는 아래 순서로 진행하면 안전합니다.
+
+1. 설정값 먼저 추가/확인 (`.env`, `app/config.py`)
+2. 청킹 로직 변경 (`app/processing/chunker.py`)
+3. API/파이프라인 호출부가 기존 인터페이스로 정상 동작하는지 검증 (`/processing/chunk`, `/processing/embed`, `/processing/full-pipeline`)
+4. 문서(README, 환경변수 표, 예시 curl) 업데이트
+
+### 코드 수정 포인트
+
+- `app/config.py`
+  - `chunk_strategy` 기본값을 `hybrid`로 설정
+  - `chunk_min_section_tokens`(작은 섹션 병합 임계값) 추가
+- `app/processing/chunker.py`
+  - **1차 구조 분할**: 헤더/문단/페이지 경계 기준으로 섹션 분리
+  - **2차 토큰 분할**: 섹션이 `chunk_size`를 넘으면 기존 토큰 기반 분할 적용
+  - 작은 섹션은 `chunk_min_section_tokens` 기준으로 병합
+- `.env.example`
+  - `CHUNK_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `CHUNK_MIN_SECTION_TOKENS` 추가
+
+### 동작 요약
+
+- `CHUNK_STRATEGY=hybrid` (기본): 의미 단위 보존을 우선하고, 긴 섹션만 토큰 단위로 재분할
+- `CHUNK_STRATEGY=token`: 기존 방식(토큰 기반 분할만)으로 동작
+
+---
+
 ## 프로젝트 구조
 
 ```
@@ -327,7 +355,7 @@ llm_again/
 │   │   ├── xlsx_parser.py     # Excel
 │   │   └── pptx_parser.py     # PowerPoint
 │   ├── processing/
-│   │   ├── chunker.py         # 토큰 기반 청킹 (512 tokens, 50 overlap)
+│   │   ├── chunker.py         # Hybrid 청킹 (구조 분할 + 토큰 분할)
 │   │   └── embedder.py        # E5 임베딩 ("passage:"/"query:" prefix)
 │   ├── pipeline/
 │   │   ├── ingest.py          # 인제스트 파이프라인
@@ -426,6 +454,10 @@ Docker Desktop → Settings → Resources → Memory → 8GB 이상
 | `EMBED_MODEL` | `intfloat/multilingual-e5-large` | 임베딩 모델 |
 | `EMBED_DEVICE` | `cpu` | 디바이스 (cpu/cuda/mps) |
 | `EMBED_BATCH_SIZE` | `32` | 배치 크기 |
+| `CHUNK_STRATEGY` | `hybrid` | 청킹 전략 (`hybrid` 또는 `token`) |
+| `CHUNK_SIZE` | `512` | 청크 최대 토큰 수 |
+| `CHUNK_OVERLAP` | `50` | 청크 간 오버랩 토큰 수 |
+| `CHUNK_MIN_SECTION_TOKENS` | `80` | 작은 섹션 병합 기준 토큰 수 |
 | `MINERU_BACKEND` | `pipeline` | MinerU 백엔드 |
 | `MINERU_LANG` | `korean` | OCR 언어 |
 | `MINERU_PIP_SPEC` | `mineru[all]` | MinerU 설치 스펙 (이미지 경량화 시 조정) |

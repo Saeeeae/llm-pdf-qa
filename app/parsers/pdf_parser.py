@@ -1,10 +1,11 @@
 import logging
 from functools import lru_cache
+from pathlib import Path
 
 import httpx
 
 from app.config import settings
-from app.parsers.base import BaseParser, ParseResult, ParsedPage
+from app.parsers.base import BaseParser, ParseResult, ParsedPage, ExtractedImage
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,20 @@ class PdfParser(BaseParser):
             for p in data["pages"]
         ]
 
+        # NEW: convert image dicts to ExtractedImage
+        images = [
+            ExtractedImage(
+                temp_path=img["path"],
+                page_num=None,
+                image_type=Path(img["path"]).suffix.lstrip("."),
+            )
+            for img in data.get("images", [])
+        ]
+
         return ParseResult(
             pages=pages,
             raw_text=data["markdown"],
             total_pages=data["total_pages"],
             metadata=data["metadata"],
+            images=images,
         )

@@ -3,6 +3,8 @@ import tempfile
 import shutil
 from pathlib import Path
 
+from typing import Optional
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from pydantic import BaseModel
 
@@ -74,6 +76,9 @@ class SearchResult(BaseModel):
     chunk_idx: int
     text: str
     file_name: str
+    chunk_type: str = "text"
+    image_id: Optional[int] = None
+    image_path: Optional[str] = None
 
 
 # === Endpoints ===
@@ -233,7 +238,7 @@ def search_vectors(request: SearchRequest):
     from app.db.vector_store import search_similar
 
     query_vector = embed_query(request.query)
-    results = search_similar(vector=query_vector.tolist(), limit=request.limit)
+    results = search_similar(query_vector=query_vector.tolist(), limit=request.limit)
 
     return [
         SearchResult(
@@ -242,6 +247,9 @@ def search_vectors(request: SearchRequest):
             chunk_idx=r["chunk_idx"],
             text=r["text"],
             file_name=r["file_name"],
+            chunk_type=r.get("chunk_type", "text"),
+            image_id=r.get("image_id"),
+            image_path=r.get("image_path"),
         )
         for r in results
     ]

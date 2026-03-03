@@ -3,11 +3,12 @@ import os
 from datetime import datetime, timezone
 
 from app.config import settings
-from app.db.models import Document, DocChunk, SystemJob
+from app.db.models import Document, DocChunk, DocImage, SystemJob
 from app.db.postgres import get_session
 from app.pipeline.ingest import compute_file_hash
 from app.pipeline.ingest import ingest_document
 from app.pipeline.scanner import scan_files
+from app.processing.image_store import delete_images_for_document
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +119,9 @@ def run_sync() -> dict:
 
 
 def _delete_document_data(session, doc: Document):
-    """Delete document and its chunks (CASCADE deletes chunks + vectors)."""
+    """Delete document, its chunks, images from DB and disk."""
+    delete_images_for_document(doc.doc_id)
     session.query(DocChunk).filter(DocChunk.doc_id == doc.doc_id).delete()
+    session.query(DocImage).filter(DocImage.doc_id == doc.doc_id).delete()
     session.delete(doc)
     logger.info("Deleted document data: doc_id=%d, file=%s", doc.doc_id, doc.file_name)

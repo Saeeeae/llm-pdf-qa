@@ -6,6 +6,7 @@ init:
 	@echo "Creating /data directory structure..."
 	sudo mkdir -p /data/db/postgres /data/db/redis
 	sudo mkdir -p /data/documents
+	sudo mkdir -p /data/images
 	sudo mkdir -p /data/models/embedding /data/models/mineru /data/models/llm /data/models/vlm
 	sudo chown -R $$(id -u):$$(id -g) /data
 	@echo "Done. Next: make download-models"

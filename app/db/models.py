@@ -79,6 +79,23 @@ class Document(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     chunks = relationship("DocChunk", back_populates="document", cascade="all, delete-orphan")
+    images = relationship("DocImage", back_populates="document", cascade="all, delete-orphan")
+
+
+class DocImage(Base):
+    __tablename__ = "doc_image"
+
+    image_id = Column(Integer, primary_key=True, autoincrement=True)
+    doc_id = Column(Integer, ForeignKey("document.doc_id", ondelete="CASCADE"), nullable=False)
+    page_number = Column(Integer)
+    image_path = Column(Text, nullable=False)
+    image_type = Column(String(20))
+    width = Column(Integer)
+    height = Column(Integer)
+    description = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="images")
 
 
 class DocChunk(Base):
@@ -92,10 +109,13 @@ class DocChunk(Base):
     page_number = Column(Integer)
     embedding = Column(Vector(1024))
     embed_model = Column(String(100))
+    chunk_type = Column(String(20), default="text")
+    image_id = Column(Integer, ForeignKey("doc_image.image_id", ondelete="SET NULL"))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     document = relationship("Document", back_populates="chunks")
+    image = relationship("DocImage")
 
 
 class SystemJob(Base):

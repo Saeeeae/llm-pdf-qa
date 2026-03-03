@@ -44,7 +44,7 @@ def search_similar(
 ) -> list[dict]:
     """Cosine similarity search using pgvector.
 
-    Returns list of dicts with: chunk_id, doc_id, chunk_idx, content, score, file_name.
+    Returns list of dicts with chunk info, score, and optional image metadata.
     """
     params: dict = {"vec": query_vector, "lim": limit}
 
@@ -59,10 +59,15 @@ def search_similar(
             dc.doc_id,
             dc.chunk_idx,
             dc.content,
+            dc.chunk_type,
             1 - (dc.embedding <=> :vec::vector) AS score,
-            d.file_name
+            d.file_name,
+            di.image_id,
+            di.image_path,
+            di.image_type
         FROM doc_chunk dc
         JOIN document d ON dc.doc_id = d.doc_id
+        LEFT JOIN doc_image di ON dc.image_id = di.image_id
         {where_clause}
         ORDER BY dc.embedding <=> :vec::vector
         LIMIT :lim
@@ -77,8 +82,12 @@ def search_similar(
             "doc_id": r.doc_id,
             "chunk_idx": r.chunk_idx,
             "text": r.content[:500],
+            "chunk_type": r.chunk_type or "text",
             "score": float(r.score),
             "file_name": r.file_name,
+            "image_id": r.image_id,
+            "image_path": r.image_path,
+            "image_type": r.image_type,
         }
         for r in rows
     ]

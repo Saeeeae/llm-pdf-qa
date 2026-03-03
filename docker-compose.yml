@@ -42,11 +42,13 @@ services:
     env_file: .env
     environment:
       - PYTHONPATH=/app
+      - MINERU_OUTPUT_DIR=/data/images/_mineru_tmp
     ports:
       - "9000:9000"
     volumes:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
       - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"]
       interval: 30s
@@ -72,6 +74,7 @@ services:
     volumes:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents
       - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,6 +100,7 @@ services:
     volumes:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
       - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     depends_on:
       postgres:
         condition: service_healthy

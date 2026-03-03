@@ -5,7 +5,7 @@ from pathlib import Path
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 
-from app.parsers.base import BaseParser, ParseResult, ParsedPage
+from app.parsers.base import BaseParser, ParseResult, ParsedPage, ExtractedImage
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ class DocxParser(BaseParser):
 
     def parse(self, file_path: str) -> ParseResult:
         doc = DocxDocument(file_path)
+        self._extracted_images = []
 
         # 문서 body의 요소를 순서대로 처리 (paragraph, table, image 혼재)
         parts = []
@@ -74,6 +75,7 @@ class DocxParser(BaseParser):
                 "source": file_path,
                 "image_count": image_count,
             },
+            images=self._extracted_images,  # NEW
         )
 
     def _table_to_markdown(self, tbl_element) -> str:
@@ -154,9 +156,16 @@ class DocxParser(BaseParser):
                 tmp.write(blob)
                 tmp_path = tmp.name
 
+            # Save image reference (do NOT delete temp file)
+            self._extracted_images.append(ExtractedImage(
+                temp_path=tmp_path,
+                page_num=1,
+                image_type="png",
+            ))
+
             parser = ImageParser()
             result = parser.parse(tmp_path)
-            Path(tmp_path).unlink(missing_ok=True)
+            # Don't unlink - the ingest pipeline will move it
 
             if result.raw_text.strip():
                 return result.raw_text.strip()

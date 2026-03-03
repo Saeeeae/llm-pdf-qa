@@ -185,7 +185,24 @@ CREATE INDEX IF NOT EXISTS idx_document_status ON document(status);
 CREATE INDEX IF NOT EXISTS idx_document_created_at ON document(created_at DESC);
 
 -- =============================================================================
--- 12. Doc Chunk - Document chunks for RAG
+-- 12. Doc Image - Extracted images from documents
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS doc_image (
+    image_id SERIAL PRIMARY KEY,
+    doc_id INTEGER NOT NULL REFERENCES document(doc_id) ON DELETE CASCADE,
+    page_number INTEGER,
+    image_path TEXT NOT NULL,
+    image_type VARCHAR(20),
+    width INTEGER,
+    height INTEGER,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_doc_image_doc ON doc_image(doc_id);
+CREATE INDEX IF NOT EXISTS idx_doc_image_page ON doc_image(doc_id, page_number);
+
+-- =============================================================================
+-- 13. Doc Chunk - Document chunks for RAG
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS doc_chunk (
     chunk_id SERIAL PRIMARY KEY,
@@ -196,6 +213,8 @@ CREATE TABLE IF NOT EXISTS doc_chunk (
     page_number INTEGER,
     embedding vector(1024),
     embed_model VARCHAR(100),
+    chunk_type VARCHAR(20) DEFAULT 'text',
+    image_id INTEGER REFERENCES doc_image(image_id) ON DELETE SET NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -205,9 +224,10 @@ CREATE INDEX IF NOT EXISTS idx_doc_chunk_doc ON doc_chunk(doc_id, chunk_idx);
 -- HNSW index for fast cosine similarity search
 CREATE INDEX IF NOT EXISTS idx_doc_chunk_embedding ON doc_chunk
     USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_doc_chunk_type ON doc_chunk(chunk_type);
 
 -- =============================================================================
--- 13. Chat Message
+-- 14. Chat Message
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS chat_msg (
     msg_id SERIAL PRIMARY KEY,
@@ -221,7 +241,7 @@ CREATE TABLE IF NOT EXISTS chat_msg (
 CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_msg(session_id, created_at);
 
 -- =============================================================================
--- 14. Message Reference - RAG source tracking
+-- 15. Message Reference - RAG source tracking
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS msg_ref (
     ref_id SERIAL PRIMARY KEY,
@@ -235,7 +255,7 @@ CREATE TABLE IF NOT EXISTS msg_ref (
 CREATE INDEX IF NOT EXISTS idx_msg_ref_msg ON msg_ref(msg_id);
 
 -- =============================================================================
--- 15. Access Request - Workspace access requests
+-- 16. Access Request - Workspace access requests
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS access_request (
     req_id SERIAL PRIMARY KEY,
@@ -250,7 +270,7 @@ CREATE TABLE IF NOT EXISTS access_request (
 CREATE INDEX IF NOT EXISTS idx_access_request_status ON access_request(status);
 
 -- =============================================================================
--- 16. Audit Log - Universal activity tracking
+-- 17. Audit Log - Universal activity tracking
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS audit_log (
     log_id SERIAL PRIMARY KEY,
@@ -268,7 +288,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action_type);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
 
 -- =============================================================================
--- 17. System Job - Background job scheduler
+-- 18. System Job - Background job scheduler
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS system_job (
     job_id SERIAL PRIMARY KEY,
@@ -284,7 +304,7 @@ CREATE TABLE IF NOT EXISTS system_job (
 CREATE INDEX IF NOT EXISTS idx_system_job_type ON system_job(job_type);
 
 -- =============================================================================
--- 18. System Health - Service health monitoring
+-- 19. System Health - Service health monitoring
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS system_health (
     id SERIAL PRIMARY KEY,

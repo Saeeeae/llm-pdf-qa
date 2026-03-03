@@ -1,13 +1,15 @@
 import hashlib
 import logging
+import shutil
 from pathlib import Path
 
 from app.config import settings
-from app.db.models import Document, DocChunk
+from app.db.models import Document, DocChunk, DocImage
 from app.db.postgres import get_session
 from app.parsers import get_parser
-from app.processing.chunker import chunk_text
+from app.processing.chunker import chunk_text, token_length
 from app.processing.embedder import embed_chunks
+from app.processing.image_store import save_images_for_document
 
 logger = logging.getLogger(__name__)
 
@@ -64,40 +66,64 @@ def ingest_document(
             result = parser.parse(file_path)
             logger.info("Parsed %s: %d pages", path.name, result.total_pages)
 
-            # 2. Chunk
+            # 2. Save images to disk + create DocImage records
+            image_records = []
+            if result.images:
+                saved = save_images_for_document(doc_id, result.images)
+                for s in saved:
+                    img_rec = DocImage(
+                        doc_id=doc_id,
+                        page_number=s["page_num"],
+                        image_path=s["permanent_path"],
+                        image_type=s["image_type"],
+                        width=s["width"],
+                        height=s["height"],
+                    )
+                    session.add(img_rec)
+                    session.flush()  # get image_id
+                    image_records.append(img_rec)
+                logger.info("Saved %d images for %s", len(image_records), path.name)
+
+            # 3. VLM description + embedding (if enabled)
+            if settings.enable_image_embedding and image_records:
+                _process_image_descriptions(session, doc_id, image_records)
+
+            # 4. Chunk text
             chunks = chunk_text(result.raw_text)
-            if not chunks:
+            if not chunks and not image_records:
                 doc.status = "indexed"
                 doc.total_page_cnt = result.total_pages
                 logger.warning("No chunks produced for %s", path.name)
                 return doc_id
 
-            # 3. Embed
-            texts = [c["text"] for c in chunks]
-            embeddings = embed_chunks(texts)
-            logger.info("Embedded %d chunks for %s", len(chunks), path.name)
+            # 5. Embed text chunks
+            if chunks:
+                texts = [c["text"] for c in chunks]
+                embeddings = embed_chunks(texts)
+                logger.info("Embedded %d chunks for %s", len(chunks), path.name)
 
-            # 4. Store in PostgreSQL (chunks + vectors in same table)
-            chunk_records = []
-            for chunk, embedding in zip(chunks, embeddings):
-                chunk_records.append(
-                    DocChunk(
-                        doc_id=doc_id,
-                        chunk_idx=chunk["chunk_idx"],
-                        content=chunk["text"],
-                        token_cnt=chunk["token_cnt"],
-                        page_number=_find_page_for_chunk(result, chunk["text"]),
-                        embedding=embedding.tolist(),
-                        embed_model=settings.embed_model,
+                # 6. Store in PostgreSQL
+                chunk_records = []
+                for chunk, embedding in zip(chunks, embeddings):
+                    chunk_records.append(
+                        DocChunk(
+                            doc_id=doc_id,
+                            chunk_idx=chunk["chunk_idx"],
+                            content=chunk["text"],
+                            token_cnt=chunk["token_cnt"],
+                            page_number=_find_page_for_chunk(result, chunk["text"]),
+                            embedding=embedding.tolist(),
+                            embed_model=settings.embed_model,
+                            chunk_type="text",
+                        )
                     )
-                )
-
-            session.add_all(chunk_records)
+                session.add_all(chunk_records)
 
             doc.status = "indexed"
             doc.total_page_cnt = result.total_pages
             logger.info(
-                "Ingested %s: doc_id=%d, chunks=%d", path.name, doc_id, len(chunks)
+                "Ingested %s: doc_id=%d, chunks=%d, images=%d",
+                path.name, doc_id, len(chunks), len(image_records),
             )
 
         except Exception as e:
@@ -105,8 +131,42 @@ def ingest_document(
             doc.error_msg = str(e)[:1000]
             logger.error("Failed to ingest %s: %s", path.name, e)
             raise
+        finally:
+            # Cleanup MinerU temp output directory
+            mineru_dir = result.metadata.get("mineru_output_dir") if hasattr(result, "metadata") else None
+            if mineru_dir and Path(mineru_dir).is_dir():
+                shutil.rmtree(mineru_dir, ignore_errors=True)
 
     return doc_id
+
+
+def _process_image_descriptions(session, doc_id: int, image_records: list[DocImage]):
+    """Generate VLM descriptions for images and create embedding chunks."""
+    from app.processing.vlm_client import describe_image
+
+    for img_rec in image_records:
+        description = describe_image(img_rec.image_path)
+        if not description:
+            continue
+
+        img_rec.description = description
+
+        # Embed the description and store as a special chunk
+        desc_embeddings = embed_chunks([description])
+        desc_chunk = DocChunk(
+            doc_id=doc_id,
+            chunk_idx=10000 + img_rec.image_id,
+            content=description,
+            token_cnt=token_length(description),
+            page_number=img_rec.page_number,
+            embedding=desc_embeddings[0].tolist(),
+            embed_model=settings.embed_model,
+            chunk_type="image_description",
+            image_id=img_rec.image_id,
+        )
+        session.add(desc_chunk)
+
+    logger.info("Processed VLM descriptions for doc_id=%d", doc_id)
 
 
 def _find_page_for_chunk(result, chunk_text: str) -> int | None:

@@ -4,8 +4,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.db.models import Document, DocChunk
+from app.db.models import Document, DocChunk, DocImage
 from app.db.postgres import get_session
+from app.processing.image_store import delete_images_for_document
 from app.pipeline.scanner import scan_files, scan_and_ingest
 from app.pipeline.sync import run_sync
 from app.tasks.ingest_tasks import ingest_file
@@ -179,8 +180,11 @@ def delete_document(doc_id: int):
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
 
-        # CASCADE로 청크(+벡터) 삭제
+        # Delete images from disk
+        delete_images_for_document(doc_id)
+        # CASCADE로 이미지 + 청크(+벡터) 삭제
         session.query(DocChunk).filter(DocChunk.doc_id == doc_id).delete()
+        session.query(DocImage).filter(DocImage.doc_id == doc_id).delete()
         session.delete(doc)
 
         return {"message": f"Document {doc_id} ({doc.file_name}) deleted"}
@@ -265,6 +269,10 @@ def document_stats():
         processing = session.query(Document).filter(Document.status == "processing").count()
 
         total_chunks = session.query(DocChunk).count()
+        text_chunks = session.query(DocChunk).filter(DocChunk.chunk_type == "text").count()
+        image_desc_chunks = session.query(DocChunk).filter(DocChunk.chunk_type == "image_description").count()
+        total_images = session.query(DocImage).count()
+        described_images = session.query(DocImage).filter(DocImage.description.isnot(None)).count()
 
         return {
             "documents": {
@@ -274,5 +282,13 @@ def document_stats():
                 "pending": pending,
                 "processing": processing,
             },
-            "chunks": {"total": total_chunks},
+            "chunks": {
+                "total": total_chunks,
+                "text": text_chunks,
+                "image_description": image_desc_chunks,
+            },
+            "images": {
+                "total": total_images,
+                "with_description": described_images,
+            },
         }
