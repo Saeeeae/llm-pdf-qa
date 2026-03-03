@@ -54,111 +54,66 @@ PostgreSQL(청크 DB) + Qdrant(벡터 DB)에 저장하는 온프레미스 전처
 
 ---
 
-## Quick Start
+## Quick Start (처음 시작하는 사람용)
 
-### 1. 환경 설정
+아래 5단계만 따라 하면 첫 문서 인제스트까지 바로 확인할 수 있습니다.
+
+### 1. 프로젝트 준비
 
 ```bash
 git clone <repository-url>
 cd llm_again
-
 cp .env.example .env
-vi .env
 ```
 
-**필수 수정 항목:**
+### 2. `.env` 필수값 설정
 
 ```ini
-# 문서 폴더 경로 (호스트 머신의 절대경로)
-DOC_WATCH_DIR=/home/user/documents     # Linux
-DOC_WATCH_DIR=/Users/user/documents    # Mac
+# 컨테이너 내부에서 DB 서비스 이름으로 접속
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=rag_system
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=admin1234
 
-# DB 비밀번호 (운영 환경에서 반드시 변경)
-POSTGRES_PASSWORD=your_secure_password
+# 문서 감시 폴더
+DOC_WATCH_DIR=/Users/<you>/rag_documents   # Linux면 /home/<you>/rag_documents
 
-# GPU가 있는 경우 MinerU 백엔드 변경 (정확도 향상)
-MINERU_BACKEND=hybrid-auto-engine      # GPU 10GB+ VRAM
-# MINERU_BACKEND=pipeline              # CPU only (기본값)
+# 청킹 전략 (기본값 그대로 사용 가능)
+CHUNK_STRATEGY=hybrid
 ```
 
-### 2. 서비스 시작
+### 3. 서비스 실행
 
 ```bash
 make up
-```
-
-```bash
-# 상태 확인
 make ps
-
-# 기대 출력:
-# rag-api             running
-# rag-postgres        running (healthy)
-# rag-qdrant          running (healthy)
-# rag-redis           running (healthy)
-# rag-celery-worker   running
-# rag-celery-beat     running
 ```
 
-### 3. 파일 스캔 (처리 전 확인)
+정상이라면 `rag-postgres`, `rag-redis`, `rag-mineru-api`, `rag-api`, `rag-celery-worker`, `rag-celery-beat`가 실행 상태입니다.
+
+### 4. 첫 문서 인제스트 (가장 쉬운 방법)
 
 ```bash
-# DOC_WATCH_DIR 내 파일 목록 확인
-docker compose exec celery-worker python -m app.main scan
-
-# 출력 예시:
-# Directory: /data/documents
-# Total files: 47
-# By type: {'pdf': 25, 'docx': 10, 'xlsx': 8, 'pptx': 4}
-#
-#   .pdf      1234.5 KB  annual_report_2024.pdf
-#   .docx      456.2 KB  meeting_notes.docx
-#   ...
-
-# glob 패턴으로 특정 파일만 필터링
-docker compose exec celery-worker python -m app.main scan --pattern "**/*.pdf"
-docker compose exec celery-worker python -m app.main scan --pattern "report_*.xlsx"
-docker compose exec celery-worker python -m app.main scan --ext pdf,docx
-
-# API로 스캔
-curl "http://localhost:8000/api/v1/documents/scan"
-curl "http://localhost:8000/api/v1/documents/scan?pattern=**/*.pdf"
-curl "http://localhost:8000/api/v1/documents/scan?extensions=pdf,docx&recursive=true"
-```
-
-### 4. 문서 처리
-
-```bash
-# 방법 A: 감시 폴더 전체 동기화
-cp ~/my_documents/*.pdf /home/user/documents/
-make sync
-
-# 방법 B: 스캔 결과를 바로 인제스트
-docker compose exec celery-worker python -m app.main scan --pattern "**/*.pdf" --ingest
-
-# 방법 C: API로 파일 업로드 (전체 파이프라인)
 curl -X POST http://localhost:8000/api/v1/processing/full-pipeline \
-  -F "file=@report.pdf"
-
-# 방법 D: API로 스캔 + 일괄 인제스트
-curl -X POST "http://localhost:8000/api/v1/documents/scan/ingest?pattern=**/*.pdf"
-
-# 방법 E: CLI로 단일 파일
-make ingest-file FILE=/data/documents/report.pdf
-
-# 방법 F: 특정 디렉토리만 인제스트
-docker compose exec celery-worker python -m app.main ingest --dir /data/documents/2024/
+  -F "file=@/absolute/path/to/document.pdf"
 ```
 
-### 5. 상태 확인
+### 5. 결과 확인
 
 ```bash
 make status
-# Documents: total=150, indexed=145, failed=3, pending=2
-# Chunks: total=4230
-
-# 또는 API:
 curl http://localhost:8000/api/v1/documents/stats/summary
+```
+
+### 비밀번호 오류가 날 때 (초기화 팁)
+
+`POSTGRES_PASSWORD`를 바꿨는데 인증 오류가 나면 기존 DB 데이터가 남아있을 수 있습니다.
+
+```bash
+docker compose down -v --remove-orphans
+sudo rm -rf /data/db/postgres
+make up
 ```
 
 ---
