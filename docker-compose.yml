@@ -156,13 +156,15 @@ services:
     profiles:
       - gpu
 
-  searxng:
-    image: searxng/searxng:latest
-    container_name: rag-searxng
-    environment:
-      - SEARXNG_SECRET=${SEARXNG_SECRET:-changethissecret32chars}
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: rag-frontend
     ports:
-      - "8080:8080"
-    volumes:
-      - ./searxng:/etc/searxng
+      - "3000:3000"
+    depends_on:
+      - api
     restart: unless-stopped
