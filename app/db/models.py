@@ -153,3 +153,107 @@ class SystemHealth(Base):
     response_time_ms = Column(Float)
     metadata_json = Column(JSON)
     checked_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Workspace(Base):
+    __tablename__ = "workspace"
+
+    ws_id = Column(Integer, primary_key=True, autoincrement=True)
+    ws_name = Column(String(200), nullable=False)
+    owner_dept_id = Column(Integer, ForeignKey("department.dept_id", ondelete="RESTRICT"), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    is_active = Column(Boolean, default=True)
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_token"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(Text, nullable=False, unique=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    revoked = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    ip_address = Column(String(45))
+
+    user = relationship("User")
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preference"
+
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
+    preferences = Column(JSON, default=lambda: {"search_scope": "all", "web_search": False, "theme": "light"})
+
+    user = relationship("User")
+
+
+class LLMConfig(Base):
+    __tablename__ = "llm_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    model_name = Column(String(100), nullable=False)
+    vllm_url = Column(String(255), nullable=False, default="http://vllm-server:8001/v1")
+    system_prompt = Column(Text)
+    max_tokens = Column(Integer, default=4096)
+    temperature = Column(Float, default=0.7)
+    top_p = Column(Float, default=0.9)
+    context_chunks = Column(Integer, default=5)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ChatSession(Base):
+    __tablename__ = "chat_session"
+
+    session_id = Column(Integer, primary_key=True, autoincrement=True)
+    ws_id = Column(Integer, ForeignKey("workspace.ws_id", ondelete="SET NULL"))
+    created_by = Column(Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False)
+    title = Column(String(300))
+    session_type = Column(String(20), nullable=False, default="private")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    creator = relationship("User", foreign_keys=[created_by])
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_msg"
+
+    msg_id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, ForeignKey("chat_session.session_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"))
+    sender_type = Column(String(10), nullable=False)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    session = relationship("ChatSession", back_populates="messages")
+    references = relationship("MsgRef", back_populates="message", cascade="all, delete-orphan")
+
+
+class MsgRef(Base):
+    __tablename__ = "msg_ref"
+
+    ref_id = Column(Integer, primary_key=True, autoincrement=True)
+    msg_id = Column(Integer, ForeignKey("chat_msg.msg_id", ondelete="CASCADE"), nullable=False)
+    doc_id = Column(Integer, ForeignKey("document.doc_id", ondelete="SET NULL"))
+    chunk_id = Column(Integer, ForeignKey("doc_chunk.chunk_id", ondelete="SET NULL"))
+    web_url = Column(String(2048))
+    relevance_score = Column(Float)
+
+    message = relationship("ChatMessage", back_populates="references")
+
+
+class WebSearchLog(Base):
+    __tablename__ = "web_search_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"))
+    session_id = Column(Integer, ForeignKey("chat_session.session_id", ondelete="SET NULL"))
+    query = Column(Text, nullable=False)
+    was_blocked = Column(Boolean, default=False)
+    block_reason = Column(Text)
+    results_count = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

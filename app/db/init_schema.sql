@@ -367,6 +367,65 @@ INSERT INTO roles (role_name, auth_level) VALUES
     ON CONFLICT (role_name) DO NOTHING;
 
 -- =============================================================================
+-- 20. Refresh Token
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS refresh_token (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    revoked BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    ip_address VARCHAR(45)
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_token_user ON refresh_token(user_id);
+CREATE INDEX IF NOT EXISTS idx_refresh_token_hash ON refresh_token(token_hash);
+
+-- =============================================================================
+-- 21. User Preference
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS user_preference (
+    user_id INTEGER PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+    preferences JSONB DEFAULT '{"search_scope": "all", "web_search": false, "theme": "light"}'
+);
+
+-- =============================================================================
+-- 22. LLM Config (Admin managed)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS llm_config (
+    id SERIAL PRIMARY KEY,
+    model_name VARCHAR(100) NOT NULL,
+    vllm_url VARCHAR(255) NOT NULL DEFAULT 'http://vllm-server:8001/v1',
+    system_prompt TEXT DEFAULT '당신은 사내 문서를 기반으로 답변하는 AI 어시스턴트입니다. 제공된 문서 내용을 바탕으로 정확하고 도움이 되는 답변을 제공하세요.',
+    max_tokens INTEGER DEFAULT 4096,
+    temperature FLOAT DEFAULT 0.7,
+    top_p FLOAT DEFAULT 0.9,
+    context_chunks INTEGER DEFAULT 5,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =============================================================================
+-- 23. Web Search Log
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS web_search_log (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+    session_id INTEGER REFERENCES chat_session(session_id) ON DELETE SET NULL,
+    query TEXT NOT NULL,
+    was_blocked BOOLEAN DEFAULT FALSE,
+    block_reason TEXT,
+    results_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_web_search_log_user ON web_search_log(user_id);
+
+-- Seed: default LLM config
+INSERT INTO llm_config (model_name, vllm_url) VALUES
+    ('qwen2.5-72b', 'http://vllm-server:8001/v1')
+    ON CONFLICT DO NOTHING;
+
+-- =============================================================================
 -- Views for Analytics
 -- =============================================================================
 CREATE OR REPLACE VIEW user_activity_summary AS
