@@ -41,17 +41,38 @@ def search_similar(
     query_vector: list[float],
     limit: int = 5,
     doc_id_filter: int | None = None,
+    user_dept_id: int | None = None,
+    user_auth_level: int | None = None,
+    accessible_folder_ids: list[int] | None = None,
+    search_scope: str = "all",
 ) -> list[dict]:
-    """Cosine similarity search using pgvector.
+    """Cosine similarity search with RBAC filtering.
 
-    Returns list of dicts with chunk info, score, and optional image metadata.
+    search_scope:
+      "all"    — filter by role auth_level only
+      "dept"   — restrict to user's department documents
+      "folder" — restrict to accessible_folder_ids
     """
     params: dict = {"vec": query_vector, "lim": limit}
 
-    where_clause = "WHERE dc.embedding IS NOT NULL"
+    conditions = ["dc.embedding IS NOT NULL", "d.status = 'indexed'"]
+
+    if user_auth_level is not None:
+        conditions.append("r.auth_level <= :auth_level")
+        params["auth_level"] = user_auth_level
+
+    if search_scope == "dept" and user_dept_id is not None:
+        conditions.append("d.dept_id = :dept_id")
+        params["dept_id"] = user_dept_id
+    elif search_scope == "folder" and accessible_folder_ids:
+        conditions.append("d.folder_id = ANY(:folder_ids)")
+        params["folder_ids"] = accessible_folder_ids
+
     if doc_id_filter is not None:
-        where_clause += " AND dc.doc_id = :did"
+        conditions.append("dc.doc_id = :did")
         params["did"] = doc_id_filter
+
+    where_clause = "WHERE " + " AND ".join(conditions)
 
     sql = text(f"""
         SELECT
@@ -60,6 +81,7 @@ def search_similar(
             dc.chunk_idx,
             dc.content,
             dc.chunk_type,
+            dc.page_number,
             1 - (dc.embedding <=> :vec::vector) AS score,
             d.file_name,
             di.image_id,
@@ -67,6 +89,7 @@ def search_similar(
             di.image_type
         FROM doc_chunk dc
         JOIN document d ON dc.doc_id = d.doc_id
+        JOIN roles r ON d.role_id = r.role_id
         LEFT JOIN doc_image di ON dc.image_id = di.image_id
         {where_clause}
         ORDER BY dc.embedding <=> :vec::vector
@@ -83,11 +106,11 @@ def search_similar(
             "chunk_idx": r.chunk_idx,
             "text": r.content[:500],
             "chunk_type": r.chunk_type or "text",
+            "page_number": r.page_number,
             "score": float(r.score),
             "file_name": r.file_name,
             "image_id": r.image_id,
             "image_path": r.image_path,
-            "image_type": r.image_type,
         }
         for r in rows
     ]
