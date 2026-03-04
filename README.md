@@ -1,64 +1,77 @@
-# RAG Document Preprocessing Pipeline
+# 사내 AI 어시스턴트 (On-Premise RAG-LLM)
 
-문서(PDF, DOCX, XLSX, PPTX, 이미지)를 MinerU 기반으로 **OCR → Chunking → Embedding** 처리하여
-PostgreSQL(청크 DB) + Qdrant(벡터 DB)에 저장하는 온프레미스 전처리 파이프라인.
-
-## 목적
-
-- RAG 서비스를 위한 **데이터 전처리 인프라** (Q&A 시스템 자체가 아님)
-- FastAPI로 OCR/Chunking/Embedding 기능을 **재사용 가능한 API**로 제공
-- 외부 서비스(챗봇, 검색 등)에서 동일한 전처리 파이프라인을 호출 가능
-- 매일 02:00 자동 동기화로 신규/수정/삭제 파일 **차분 업데이트**
-
-## Architecture
-
-```
-                        ┌─────────────────────────────────┐
-                        │         FastAPI (port 8000)      │
-                        │                                  │
-  [파일 업로드] ──────▶  │  POST /api/v1/processing/parse   │  ← 파싱만
-  [파일 업로드] ──────▶  │  POST /api/v1/processing/chunk   │  ← 파싱 + 청킹
-  [파일 업로드] ──────▶  │  POST /api/v1/processing/embed   │  ← 파싱 + 청킹 + 임베딩
-  [파일 업로드] ──────▶  │  POST /api/v1/processing/full-pipeline  │  ← 전체 + DB 저장
-                        │  POST /api/v1/processing/search  │  ← 벡터 검색
-                        └──────────┬───────────────────────┘
-                                   │
-              ┌────────────────────┼────────────────────┐
-              ▼                    ▼                     ▼
-    ┌──────────────┐    ┌──────────────┐      ┌──────────────┐
-    │  MinerU v2.x │    │   Chunker    │      │   Embedder   │
-    │  (OCR/PDF)   │    │ (Hybrid: 구조+토큰) │      │ (E5-large)   │
-    └──────┬───────┘    └──────┬───────┘      └──────┬───────┘
-           └───────────┬───────┘                     │
-                       ▼                             ▼
-              ┌──────────────┐              ┌──────────────┐
-              │  PostgreSQL  │              │    Qdrant    │
-              │ (metadata +  │              │  (vectors)   │
-              │   chunks)    │              │              │
-              └──────────────┘              └──────────────┘
-
-  [DOC_WATCH_DIR] ──▶ Celery Worker ──▶ 동일 파이프라인
-                     (매일 02:00 자동 동기화)
-```
-
-### Docker Services
-
-| Service | 역할 | Port |
-|---------|------|------|
-| `api` | FastAPI 문서 처리 API | 8000 |
-| `celery-worker` | 비동기 인제스트 + 동기화 처리 | - |
-| `celery-beat` | 매일 02:00 스케줄러 | - |
-| `postgres` | 메타데이터 + 청크 원본 저장 | 5432 |
-| `qdrant` | 벡터 저장/검색 | 6333 |
-| `redis` | Celery 브로커 | 6379 |
+사내 문서(PDF, DOCX, XLSX, PPTX, 이미지)를 기반으로 **ChatGPT/Claude 수준의 UX**를 제공하는 완전 온프레미스 AI 어시스턴트.
+외부 API(OpenAI, Anthropic 등) 미사용 — 보안 최우선.
 
 ---
 
-## Quick Start (처음 시작하는 사람용)
+## 시스템 구성
 
-아래 5단계만 따라 하면 첫 문서 인제스트까지 바로 확인할 수 있습니다.
+```
+┌─────────────────────────────────────────────────────────┐
+│              Next.js Frontend (port 3000)               │
+│         로그인 · 채팅 UI · 문서관리 · 관리자패널          │
+└───────────────────────┬─────────────────────────────────┘
+                        │ REST API + SSE (실시간 스트리밍)
+┌───────────────────────▼─────────────────────────────────┐
+│              FastAPI Backend (port 8000)                 │
+│  /auth  /chat  /processing  /documents  /search  /admin │
+└──────┬──────────┬──────────┬──────────┬─────────────────┘
+       │          │          │          │
+  ┌────▼───┐ ┌───▼────┐ ┌───▼────┐ ┌───▼────┐ ┌──────────┐
+  │ vLLM   │ │Qdrant/ │ │Postgres│ │ Redis  │ │ Google   │
+  │Qwen2.5 │ │pgvector│ │  DB    │ │Celery  │ │Search API│
+  │72B AWQ │ │        │ │        │ │        │ │(프록시)  │
+  └────────┘ └────────┘ └────────┘ └────────┘ └──────────┘
 
-### 1. 프로젝트 준비
+  GPU: HB200 x 1 → tensor_parallel 설정으로 x 4~8 확장
+```
+
+### Docker 서비스
+
+| 서비스 | 역할 | 포트 |
+|--------|------|------|
+| `frontend` | Next.js UI | 3000 |
+| `api` | FastAPI 백엔드 | 8000 |
+| `vllm-server` | Qwen 모델 서빙 (GPU 필요) | 8001 |
+| `postgres` | 메타데이터 · 청크 · 벡터 저장 | 5432 |
+| `redis` | Celery 브로커 | 6379 |
+| `mineru-api` | OCR/PDF 파싱 | 9000 |
+| `celery-worker` | 비동기 문서 처리 | - |
+| `celery-beat` | 일일 자동 동기화 스케줄러 | - |
+
+---
+
+## 주요 기능
+
+### 문서 전처리 파이프라인
+- **지원 형식**: PDF, DOCX, XLSX, PPTX, PNG/JPG/TIFF
+- **처리 흐름**: OCR(MinerU) → 청킹(Hybrid) → 임베딩(E5-large) → PostgreSQL 저장
+- **자동 동기화**: 매일 02:00 감시 폴더 스캔 (신규/수정/삭제 문서 자동 반영)
+
+### RAG-LLM 채팅
+- ChatGPT 수준 UX — 실시간 스트리밍 응답 (SSE)
+- 답변에 **참고 문서 · 페이지 번호** 인용
+- **RBAC 검색 필터** — 사용자 부서/역할 기반 접근 가능 문서만 검색
+- 웹 검색 연동 (Google Custom Search API 프록시, 감사 로그)
+
+### 인증 · 보안
+- JWT (Access 15분 / Refresh 7일)
+- 로그인 실패 5회 → 계정 잠금 (30분)
+- 모든 API 요청 감사 로그 (audit_log)
+- 웹 검색 쿼리 검열 (민감 정보 패턴 차단)
+
+### 관리자 패널
+- 사용자 CRUD (부서/역할 변경, 활성화/비활성화)
+- 문서 처리 현황 모니터링
+- LLM 설정 관리 (system_prompt, temperature 등)
+- 감사 로그 조회
+
+---
+
+## 빠른 시작
+
+### 1. 환경 설정
 
 ```bash
 git clone <repository-url>
@@ -66,221 +79,174 @@ cd llm_again
 cp .env.example .env
 ```
 
-### 2. `.env` 필수값 설정
+`.env` 필수 설정:
 
 ```ini
-# 컨테이너 내부에서 DB 서비스 이름으로 접속
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=rag_system
-POSTGRES_USER=admin
-POSTGRES_PASSWORD=admin1234
+# PostgreSQL
+POSTGRES_PASSWORD=your_secure_password
+
+# JWT (반드시 변경 — 최소 32자)
+JWT_SECRET=your-very-secret-key-minimum-32-characters
+
+# Google Custom Search API (웹 검색 사용 시)
+GOOGLE_API_KEY=your_google_api_key
+GOOGLE_CX=your_custom_search_engine_id
 
 # 문서 감시 폴더
-DOC_WATCH_DIR=/Users/<you>/rag_documents   # Linux면 /home/<you>/rag_documents
-
-# 청킹 전략 (기본값 그대로 사용 가능)
-CHUNK_STRATEGY=hybrid
+DOC_WATCH_DIR=/path/to/your/documents
 ```
 
-### 3. 서비스 실행
+### 2. 서비스 실행 (GPU 없이 — 개발/전처리)
 
 ```bash
+# DB + 전처리 파이프라인 + 프론트엔드
 make up
+
+# 상태 확인
 make ps
 ```
 
-정상이라면 `rag-postgres`, `rag-redis`, `rag-mineru-api`, `rag-api`, `rag-celery-worker`, `rag-celery-beat`가 실행 상태입니다.
-
-### 4. 첫 문서 인제스트 (가장 쉬운 방법)
+### 3. 첫 관리자 계정 생성
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/processing/full-pipeline \
-  -F "file=@/absolute/path/to/document.pdf"
+docker compose exec api python3 -c "
+from app.auth.password import hash_password
+from app.db.models import User
+from app.db.postgres import get_session
+with get_session() as s:
+    u = User(
+        pwd=hash_password('your_password'),
+        usr_name='관리자',
+        email='admin@company.com',
+        dept_id=1,
+        role_id=1
+    )
+    s.add(u)
+print('관리자 계정 생성 완료')
+"
 ```
 
-### 5. 결과 확인
+### 4. 브라우저 접속
+
+**http://localhost:3000** 에서 로그인 후 사용
+
+### 5. vLLM 실행 (GPU 서버)
 
 ```bash
-make status
-curl http://localhost:8000/api/v1/documents/stats/summary
-```
+# HuggingFace에서 모델 사전 다운로드 (선택)
+huggingface-cli download Qwen/Qwen2.5-72B-Instruct-AWQ \
+  --local-dir /data/models/vllm/Qwen2.5-72B-Instruct-AWQ
 
-### 비밀번호 오류가 날 때 (초기화 팁)
-
-`POSTGRES_PASSWORD`를 바꿨는데 인증 오류가 나면 기존 DB 데이터가 남아있을 수 있습니다.
-
-```bash
-docker compose down -v --remove-orphans
-sudo rm -rf /data/db/postgres
-make up
+# GPU 서비스 시작
+docker compose --profile gpu up vllm-server -d
 ```
 
 ---
 
-## 모델 다운로드
+## 문서 인제스트
 
-모든 모델은 **HuggingFace에서 첫 실행 시 자동 다운로드**됩니다.
-Docker 볼륨에 캐시되어 이후 재다운로드 불필요.
-
-| 모델 | 용도 | 크기 | 출처 |
-|------|------|------|------|
-| [intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large) | 임베딩 (1024dim, 한/영) | ~2.2GB | HuggingFace 자동 |
-| MinerU 내장 모델 (layoutlmv3 등) | PDF 레이아웃 분석, OCR | ~1-3GB | `mineru[all]` 설치 시 자동 |
+### API로 직접 업로드
 
 ```bash
-# (선택) 사전 다운로드:
-pip install huggingface_hub
-huggingface-cli download intfloat/multilingual-e5-large
-```
-
-> **HuggingFace Token**: gated 모델 사용 시
-> https://huggingface.co/settings/tokens 에서 토큰 발급 → `.env`의 `HF_TOKEN`에 설정
-
----
-
-## API Reference
-
-서비스 시작 후 Swagger UI에서 전체 API 확인 가능:
-**http://localhost:8000/docs**
-
-### Processing API (재사용 가능한 문서 처리)
-
-| Endpoint | Method | 설명 |
-|----------|--------|------|
-| `/api/v1/processing/parse` | POST | 파일 업로드 → **파싱만** (텍스트 추출) |
-| `/api/v1/processing/chunk` | POST | 파일 업로드 → **파싱 + 청킹** |
-| `/api/v1/processing/embed` | POST | 파일 업로드 → **파싱 + 청킹 + 임베딩** |
-| `/api/v1/processing/full-pipeline` | POST | 파일 업로드 → **전체 파이프라인 + DB 저장** |
-| `/api/v1/processing/search` | POST | 쿼리 텍스트 → **벡터 유사도 검색** |
-
-### Documents API (DB 관리 + 파일 스캔)
-
-| Endpoint | Method | 설명 |
-|----------|--------|------|
-| `/api/v1/documents` | GET | 문서 목록 조회 (필터: status, type) |
-| `/api/v1/documents/{doc_id}` | GET | 문서 상세 (청크 포함) |
-| `/api/v1/documents/scan` | GET | **디렉토리 스캔** (glob 패턴, 확장자 필터) |
-| `/api/v1/documents/scan/ingest` | POST | **스캔 + 일괄 인제스트** |
-| `/api/v1/documents/ingest` | POST | 단일 파일 비동기 인제스트 (Celery) |
-| `/api/v1/documents/sync` | POST | 감시 폴더 변경 감지 동기화 |
-| `/api/v1/documents/{doc_id}` | DELETE | 문서 삭제 (DB + Qdrant) |
-| `/api/v1/documents/stats/summary` | GET | 처리 현황 요약 |
-
-### API 사용 예시
-
-```bash
-# 파싱만 (텍스트 추출 결과 확인)
-curl -X POST http://localhost:8000/api/v1/processing/parse \
-  -F "file=@document.pdf"
-
-# 청킹 (커스텀 chunk_size)
-curl -X POST "http://localhost:8000/api/v1/processing/chunk?chunk_size=256&chunk_overlap=30" \
-  -F "file=@document.pdf"
-
 # 전체 파이프라인 (파싱 → 청킹 → 임베딩 → DB 저장)
 curl -X POST http://localhost:8000/api/v1/processing/full-pipeline \
-  -F "file=@report.xlsx"
+  -F "file=@document.pdf"
+```
 
-# 벡터 검색
-curl -X POST http://localhost:8000/api/v1/processing/search \
+### 감시 폴더로 자동 처리
+
+`DOC_WATCH_DIR`에 파일 복사 후 동기화 트리거:
+
+```bash
+make sync        # 수동 동기화
+make scan        # 처리 가능한 파일 목록
+make status      # 처리 현황
+```
+
+---
+
+## API 레퍼런스
+
+Swagger UI: **http://localhost:8000/docs**
+
+### 인증
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/v1/auth/login` | POST | 로그인 → access/refresh token |
+| `/api/v1/auth/refresh` | POST | access token 갱신 |
+| `/api/v1/auth/logout` | POST | refresh token 무효화 |
+| `/api/v1/auth/me` | GET | 현재 사용자 정보 |
+
+### 채팅
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/v1/chat/sessions` | POST | 새 세션 생성 |
+| `/api/v1/chat/sessions` | GET | 내 세션 목록 |
+| `/api/v1/chat/sessions/{id}/stream` | POST | **SSE 스트리밍 답변** |
+| `/api/v1/chat/sessions/{id}/messages` | GET | 대화 히스토리 |
+| `/api/v1/chat/sessions/{id}` | DELETE | 세션 삭제 |
+
+### 문서 처리
+
+| 엔드포인트 | 메서드 | 설명 |
+|-----------|--------|------|
+| `/api/v1/processing/parse` | POST | 파싱만 (텍스트 추출) |
+| `/api/v1/processing/chunk` | POST | 파싱 + 청킹 |
+| `/api/v1/processing/embed` | POST | 파싱 + 청킹 + 임베딩 |
+| `/api/v1/processing/full-pipeline` | POST | 전체 + DB 저장 |
+| `/api/v1/processing/search` | POST | 벡터 유사도 검색 |
+
+### 웹 검색 (프록시)
+
+```bash
+curl -X POST http://localhost:8000/api/v1/search/web \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"query": "매출 실적 분석", "limit": 5}'
-
-# 문서 목록 (indexed 상태만)
-curl "http://localhost:8000/api/v1/documents?status=indexed&limit=10"
-
-# 문서 삭제
-curl -X DELETE http://localhost:8000/api/v1/documents/42
+  -d '{"query": "검색어", "max_results": 5}'
 ```
 
 ---
 
-## 자동 동기화 (매일 02:00)
+## 환경변수 전체 목록
 
-Celery Beat가 `DOC_WATCH_DIR`을 스캔하여 변경 사항을 자동 처리합니다.
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `DOC_WATCH_DIR` | `/data/documents` | 문서 감시 폴더 |
+| `POSTGRES_PASSWORD` | `changeme` | DB 비밀번호 |
+| `JWT_SECRET` | *(변경 필수)* | JWT 서명 키 (32자+) |
+| `JWT_ACCESS_EXPIRE_MINUTES` | `15` | Access token 만료 (분) |
+| `JWT_REFRESH_EXPIRE_DAYS` | `7` | Refresh token 만료 (일) |
+| `GOOGLE_API_KEY` | - | Google Custom Search API 키 |
+| `GOOGLE_CX` | - | Google 커스텀 검색 엔진 ID |
+| `EMBED_MODEL` | `intfloat/multilingual-e5-large` | 임베딩 모델 |
+| `EMBED_DEVICE` | `cpu` | 디바이스 (cpu/cuda/mps) |
+| `CHUNK_STRATEGY` | `hybrid` | 청킹 전략 |
+| `CHUNK_SIZE` | `512` | 청크 최대 토큰 수 |
+| `VLLM_MODEL` | `Qwen/Qwen2.5-72B-Instruct-AWQ` | vLLM 모델 |
+| `VLLM_TENSOR_PARALLEL` | `1` | GPU 병렬 수 |
+| `VLLM_GPU_COUNT` | `1` | GPU 개수 |
+| `MINERU_BACKEND` | `pipeline` | MinerU 백엔드 |
+| `SYNC_CRON_HOUR` | `2` | 자동 동기화 시각 (시) |
+| `HF_TOKEN` | - | HuggingFace 토큰 |
 
-| 변경 유형 | 감지 방식 | 처리 |
-|----------|----------|------|
-| **새 파일** | SHA-256 해시가 DB에 없음 | 전체 인제스트 |
-| **수정된 파일** | 같은 경로, 다른 해시 | 기존 삭제 후 재인제스트 |
-| **삭제된 파일** | DB에 있지만 디스크에 없음 | DB + Qdrant에서 제거 |
+---
 
+## vLLM 모델 선택 (HB200 단일 GPU 기준)
+
+| 모델 | 메모리 | 성능 | 비고 |
+|------|--------|------|------|
+| `Qwen/Qwen2.5-72B-Instruct-AWQ` | ~40GB | 최고 | **운영 권장** |
+| `Qwen/Qwen2.5-32B-Instruct` | ~64GB | 우수 | 고정밀도 |
+| `Qwen/Qwen3-30B-A3B` | ~60GB | 우수 | MoE 효율형 |
+
+멀티 GPU 확장:
 ```ini
-# .env에서 동기화 시각 변경
-SYNC_CRON_HOUR=2
-SYNC_CRON_MINUTE=0
+# .env
+VLLM_TENSOR_PARALLEL=4   # HB200 x 4
+VLLM_GPU_COUNT=4
 ```
-
----
-
-## 지원 파일 형식 & 파서 상세
-
-| 형식 | 확장자 | 파서 | 텍스트 | 표 | 이미지 | 비고 |
-|------|--------|------|:------:|:--:|:------:|------|
-| PDF | `.pdf` | MinerU v2.x | O | O | O | 다단 레이아웃, 수식 지원 |
-| Word | `.docx` | python-docx | O | O | O (OCR) | 문서 순서 보존, 내장 이미지 MinerU OCR |
-| Excel | `.xlsx`, `.xls` | openpyxl | O | O | - | 시트별 처리, 병합 셀 지원 |
-| PowerPoint | `.pptx` | python-pptx | O | O | O (OCR) | 슬라이드별 처리, 이미지 MinerU OCR |
-| 이미지 | `.png`, `.jpg`, `.tif` | MinerU OCR | O | - | - | 한국어/영어 OCR |
-
-### 파서 처리 방식
-
-**PDF** (`pdf_parser.py`)
-- MinerU v2.x Python API 우선 → CLI fallback
-- 출력: Markdown (표, 수식, 레이아웃 보존)
-- 백엔드: `pipeline`(CPU) / `hybrid-auto-engine`(GPU)
-
-**DOCX** (`docx_parser.py`)
-- 문서 body 요소를 **순서대로** 처리 (paragraph → table → image 혼재)
-- 표: 마크다운 테이블로 변환
-- 이미지: 내장 이미지를 추출 → MinerU OCR로 텍스트 변환
-- 셀 병합, 중첩 표 처리
-
-**PPTX** (`pptx_parser.py`)
-- 슬라이드별 처리 (텍스트 프레임 + 표 + 이미지)
-- 이미지: shape에서 blob 추출 → MinerU OCR
-- 그룹 shape 내부 탐색
-
-**XLSX** (`xlsx_parser.py`)
-- 시트별 처리, 각 시트를 `## Sheet: {이름}` 헤더로 구분
-- 빈 행 스킵, 값만 추출 (`data_only=True`)
-
-### MinerU 백엔드 선택
-
-| 백엔드 | 정확도 | 요구사항 | 용도 |
-|--------|--------|----------|------|
-| `pipeline` | ~82+ | CPU, RAM 8GB+ | Mac 개발, CPU 서버 |
-| `hybrid-auto-engine` | ~90+ | GPU VRAM 10GB+ | 운영 서버 (권장) |
-| `vlm-auto-engine` | ~90+ | GPU VRAM 8GB+ | GPU 서버 |
-
----
-
-## Hybrid Chunking 적용 순서
-
-`chunking` 전략을 `hybrid`로 전환할 때는 아래 순서로 진행하면 안전합니다.
-
-1. 설정값 먼저 추가/확인 (`.env`, `app/config.py`)
-2. 청킹 로직 변경 (`app/processing/chunker.py`)
-3. API/파이프라인 호출부가 기존 인터페이스로 정상 동작하는지 검증 (`/processing/chunk`, `/processing/embed`, `/processing/full-pipeline`)
-4. 문서(README, 환경변수 표, 예시 curl) 업데이트
-
-### 코드 수정 포인트
-
-- `app/config.py`
-  - `chunk_strategy` 기본값을 `hybrid`로 설정
-  - `chunk_min_section_tokens`(작은 섹션 병합 임계값) 추가
-- `app/processing/chunker.py`
-  - **1차 구조 분할**: 헤더/문단/페이지 경계 기준으로 섹션 분리
-  - **2차 토큰 분할**: 섹션이 `chunk_size`를 넘으면 기존 토큰 기반 분할 적용
-  - 작은 섹션은 `chunk_min_section_tokens` 기준으로 병합
-- `.env.example`
-  - `CHUNK_STRATEGY`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `CHUNK_MIN_SECTION_TOKENS` 추가
-
-### 동작 요약
-
-- `CHUNK_STRATEGY=hybrid` (기본): 의미 단위 보존을 우선하고, 긴 섹션만 토큰 단위로 재분할
-- `CHUNK_STRATEGY=token`: 기존 방식(토큰 기반 분할만)으로 동작
 
 ---
 
@@ -289,137 +255,93 @@ SYNC_CRON_MINUTE=0
 ```
 llm_again/
 ├── app/
-│   ├── config.py              # 환경변수 설정 (Pydantic)
-│   ├── main.py                # CLI (ingest, sync, status)
 │   ├── api/
-│   │   ├── main.py            # FastAPI 앱
+│   │   ├── main.py              # FastAPI 앱 + CORS + 라우터
 │   │   └── routes/
-│   │       ├── health.py      # 헬스체크
-│   │       ├── documents.py   # 문서 CRUD + 동기화
-│   │       └── processing.py  # 파싱/청킹/임베딩/검색 API
+│   │       ├── auth.py          # 로그인/토큰/사용자 정보
+│   │       ├── chat.py          # 채팅 세션 CRUD + SSE 스트리밍
+│   │       ├── search.py        # Google 웹 검색 프록시
+│   │       ├── admin.py         # 관리자 API
+│   │       ├── processing.py    # 문서 전처리 API
+│   │       └── documents.py     # 문서 CRUD + 동기화
+│   ├── auth/
+│   │   ├── jwt.py               # 토큰 생성/검증
+│   │   ├── password.py          # bcrypt 해싱
+│   │   └── dependencies.py      # FastAPI Depends (인증 미들웨어)
+│   ├── chat/
+│   │   └── rag_pipeline.py      # RAG 파이프라인 (검색→프롬프트→vLLM)
 │   ├── db/
-│   │   ├── init_schema.sql    # PostgreSQL DDL
-│   │   ├── models.py          # SQLAlchemy ORM
-│   │   ├── postgres.py        # DB 연결
-│   │   └── qdrant.py          # 벡터 DB 관리
-│   ├── parsers/
-│   │   ├── base.py            # 파서 인터페이스
-│   │   ├── pdf_parser.py      # MinerU PDF
-│   │   ├── image_parser.py    # MinerU OCR
-│   │   ├── docx_parser.py     # Word
-│   │   ├── xlsx_parser.py     # Excel
-│   │   └── pptx_parser.py     # PowerPoint
-│   ├── processing/
-│   │   ├── chunker.py         # Hybrid 청킹 (구조 분할 + 토큰 분할)
-│   │   └── embedder.py        # E5 임베딩 ("passage:"/"query:" prefix)
-│   ├── pipeline/
-│   │   ├── ingest.py          # 인제스트 파이프라인
-│   │   ├── scanner.py         # 파일 스캔 (glob, 확장자 필터)
-│   │   └── sync.py            # 변경 감지 + 동기화
-│   └── tasks/
-│       ├── celery_app.py      # Celery 설정 + beat schedule
-│       ├── ingest_tasks.py    # 비동기 인제스트
-│       └── sync_tasks.py      # 스케줄 동기화
-├── docker-compose.yml         # 전체 서비스 정의
-├── Dockerfile.api             # API 이미지
-├── Dockerfile.worker          # Celery Worker/Beat 이미지
-├── Dockerfile.mineru          # MinerU 마이크로서비스 이미지
-├── Makefile                   # 편의 명령어
-├── requirements/
-│   ├── api.txt                # API 의존성
-│   ├── worker.txt             # Worker 의존성
-│   ├── mineru.txt             # MinerU API 의존성
-│   └── base.txt               # 공통 의존성
-├── requirements.txt           # 로컬 설치용 엔트리포인트(api.txt 포함)
-└── .env.example               # 환경변수 템플릿
+│   │   ├── init_schema.sql      # PostgreSQL DDL (23개 테이블)
+│   │   ├── models.py            # SQLAlchemy ORM 모델
+│   │   ├── postgres.py          # DB 연결
+│   │   └── vector_store.py      # pgvector RBAC 검색
+│   ├── parsers/                 # PDF/DOCX/XLSX/PPTX/이미지 파서
+│   ├── processing/              # 청킹 · 임베딩
+│   ├── pipeline/                # 인제스트 · 스캔 · 동기화
+│   ├── tasks/                   # Celery 태스크
+│   └── config.py                # 전체 설정 (Pydantic)
+├── frontend/
+│   ├── app/
+│   │   ├── login/               # 로그인 페이지
+│   │   ├── chat/                # 채팅 UI (레이아웃 + 세션별 페이지)
+│   │   └── admin/               # 관리자 패널
+│   ├── components/
+│   │   ├── Sidebar.tsx          # 대화 목록 사이드바
+│   │   ├── ChatMessage.tsx      # 메시지 버블 (Markdown + 참고문서)
+│   │   └── ChatInput.tsx        # 입력창 (검색범위 · 웹검색 토글)
+│   └── lib/
+│       ├── api.ts               # Axios 클라이언트 (JWT 자동 첨부/갱신)
+│       └── auth.ts              # Zustand 인증 상태
+├── docs/
+│   └── plans/
+│       ├── 2026-03-04-rag-llm-service-design.md
+│       └── 2026-03-04-rag-llm-implementation-plan.md
+├── docker-compose.yml
+├── Makefile
+└── .env.example
 ```
 
 ---
 
-## Makefile 명령어
+## Makefile 주요 명령어
 
 | 명령어 | 설명 |
 |--------|------|
 | `make up` | 전체 서비스 시작 |
 | `make down` | 서비스 중지 |
 | `make build` | Docker 이미지 빌드 |
-| `make build-api` | API 이미지 빌드 |
-| `make build-worker` | Worker/Beat 이미지 빌드 |
-| `make build-mineru` | MinerU 이미지 빌드 |
-| `make init-db` | DB 스키마 재초기화 |
-| `make scan` | 처리 가능한 파일 목록 조회 |
-| `make scan-pdf` | PDF 파일만 조회 |
-| `make scan-ingest` | 스캔 + 전체 인제스트 |
-| `make ingest` | 전체 문서 인제스트 |
-| `make ingest-file FILE=<path>` | 단일 파일 인제스트 |
-| `make sync` | 변경 감지 동기화 |
-| `make status` | 문서 처리 현황 |
-| `make logs` | API + Worker 로그 |
-| `make logs-api` | API 로그만 |
-| `make logs-worker` | Worker 로그만 |
 | `make ps` | 컨테이너 상태 |
+| `make logs` | API + Worker 로그 |
+| `make status` | 문서 처리 현황 |
+| `make sync` | 수동 동기화 |
+| `make scan` | 처리 가능한 파일 목록 |
+| `make ingest-file FILE=<path>` | 단일 파일 인제스트 |
+| `make init-db` | DB 스키마 재초기화 |
 | `make clean` | 전체 초기화 (볼륨 삭제) |
 
 ---
 
 ## 트러블슈팅
 
-### MinerU 모델 다운로드 실패
+### DB 초기화 오류 (비밀번호 변경 후)
 ```bash
-docker compose exec celery-worker bash
-python -c "from mineru.demo.demo import parse_doc; print('OK')"
+docker compose down -v --remove-orphans
+sudo rm -rf /data/db/postgres
+make up
 ```
 
-### 임베딩 모델 로딩 느림 (첫 실행)
-첫 실행 시 ~2.2GB 다운로드 필요. `hf_cache` 볼륨에 캐시됨.
-```bash
-make logs-worker
+### vLLM GPU 메모리 부족
+`.env`에서 더 작은 모델로 변경:
+```ini
+VLLM_MODEL=Qwen/Qwen2.5-32B-Instruct
 ```
 
-### PostgreSQL 연결 실패
+### 임베딩 모델 느린 로딩 (첫 실행)
+HuggingFace에서 ~2.2GB 자동 다운로드. `hf_cache` 볼륨에 캐시되어 이후 재다운로드 불필요.
+
+### 로그 확인
 ```bash
-docker compose logs postgres
-make init-db
+make logs-api      # API 서버 로그
+make logs-worker   # Celery Worker 로그
+docker compose --profile gpu logs vllm-server  # vLLM 로그
 ```
-
-### Qdrant 확인
-```bash
-# 대시보드: http://localhost:6333/dashboard
-curl http://localhost:6333/collections/documents
-```
-
-### Mac 메모리 부족
-Docker Desktop → Settings → Resources → Memory → 8GB 이상
-
----
-
-## 환경변수
-
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `DOC_WATCH_DIR` | `/data/documents` | 문서 감시 폴더 |
-| `POSTGRES_HOST` | `postgres` | PostgreSQL 호스트 |
-| `POSTGRES_PORT` | `5432` | PostgreSQL 포트 |
-| `POSTGRES_DB` | `rag_system` | 데이터베이스명 |
-| `POSTGRES_USER` | `admin` | DB 사용자 |
-| `POSTGRES_PASSWORD` | `changeme` | DB 비밀번호 |
-| `QDRANT_HOST` | `qdrant` | Qdrant 호스트 |
-| `QDRANT_PORT` | `6333` | Qdrant 포트 |
-| `QDRANT_COLLECTION` | `documents` | Qdrant 컬렉션명 |
-| `EMBED_MODEL` | `intfloat/multilingual-e5-large` | 임베딩 모델 |
-| `EMBED_DEVICE` | `cpu` | 디바이스 (cpu/cuda/mps) |
-| `EMBED_BATCH_SIZE` | `32` | 배치 크기 |
-| `CHUNK_STRATEGY` | `hybrid` | 청킹 전략 (`hybrid` 또는 `token`) |
-| `CHUNK_SIZE` | `512` | 청크 최대 토큰 수 |
-| `CHUNK_OVERLAP` | `50` | 청크 간 오버랩 토큰 수 |
-| `CHUNK_MIN_SECTION_TOKENS` | `80` | 작은 섹션 병합 기준 토큰 수 |
-| `MINERU_BACKEND` | `pipeline` | MinerU 백엔드 |
-| `MINERU_LANG` | `korean` | OCR 언어 |
-| `MINERU_PIP_SPEC` | `mineru[all]` | MinerU 설치 스펙 (이미지 경량화 시 조정) |
-| `API_HOST` | `0.0.0.0` | FastAPI 호스트 |
-| `API_PORT` | `8000` | FastAPI 포트 |
-| `CELERY_BROKER_URL` | `redis://redis:6379/0` | Celery 브로커 |
-| `CELERY_RESULT_BACKEND` | `redis://redis:6379/1` | Celery 결과 |
-| `SYNC_CRON_HOUR` | `2` | 동기화 시각 (시) |
-| `SYNC_CRON_MINUTE` | `0` | 동기화 시각 (분) |
-| `HF_TOKEN` | - | HuggingFace 토큰 |
