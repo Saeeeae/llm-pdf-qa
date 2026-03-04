@@ -69,6 +69,14 @@ class Settings(BaseSettings):
     vlm_model_name: str = "Qwen3.5"
     image_store_dir: str = "/data/images"
 
+    # vLLM
+    vllm_api_url: str = "http://vllm-server:8001/v1"
+    vllm_model_name: str = "qwen2.5-72b"
+
+    # Web Search
+    searxng_url: str = "http://searxng:8080"
+    web_search_enabled: bool = True
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

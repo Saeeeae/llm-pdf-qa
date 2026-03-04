@@ -125,3 +125,44 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  vllm-server:
+    image: vllm/vllm-openai:latest
+    container_name: rag-vllm
+    command: >
+      python -m vllm.entrypoints.openai.api_server
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-72B-Instruct-AWQ}
+      --quantization ${VLLM_QUANTIZATION:-awq}
+      --tensor-parallel-size ${VLLM_TENSOR_PARALLEL:-1}
+      --gpu-memory-utilization ${VLLM_GPU_MEM_UTIL:-0.90}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-32768}
+      --served-model-name ${VLLM_SERVED_MODEL_NAME:-qwen2.5-72b}
+      --host 0.0.0.0
+      --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ${VLLM_MODEL_DIR:-/data/models/vllm}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${VLLM_GPU_COUNT:-1}
+              capabilities: [gpu]
+    restart: unless-stopped
+    profiles:
+      - gpu
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: rag-searxng
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET:-changethissecret32chars}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    restart: unless-stopped
