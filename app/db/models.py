@@ -177,7 +177,7 @@ class RefreshToken(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     ip_address = Column(String(45))
 
-    user = relationship("User")
+    user = relationship("User", viewonly=True)
 
 
 class UserPreference(Base):
@@ -186,7 +186,7 @@ class UserPreference(Base):
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), primary_key=True)
     preferences = Column(JSON, default=lambda: {"search_scope": "all", "web_search": False, "theme": "light"})
 
-    user = relationship("User")
+    user = relationship("User", viewonly=True)
 
 
 class LLMConfig(Base):
@@ -195,7 +195,7 @@ class LLMConfig(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     model_name = Column(String(100), nullable=False)
     vllm_url = Column(String(255), nullable=False, default="http://vllm-server:8001/v1")
-    system_prompt = Column(Text)
+    system_prompt = Column(Text, default="당신은 사내 문서를 기반으로 답변하는 AI 어시스턴트입니다. 제공된 문서 내용을 바탕으로 정확하고 도움이 되는 답변을 제공하세요.")
     max_tokens = Column(Integer, default=4096)
     temperature = Column(Float, default=0.7)
     top_p = Column(Float, default=0.9)
@@ -244,6 +244,8 @@ class MsgRef(Base):
     relevance_score = Column(Float)
 
     message = relationship("ChatMessage", back_populates="references")
+    document = relationship("Document", viewonly=True)
+    chunk = relationship("DocChunk", viewonly=True)
 
 
 class WebSearchLog(Base):
@@ -257,3 +259,75 @@ class WebSearchLog(Base):
     block_reason = Column(Text)
     results_count = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class FolderAccess(Base):
+    __tablename__ = "folder_access"
+
+    access_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    folder_id = Column(Integer, ForeignKey("doc_folder.folder_id", ondelete="CASCADE"), nullable=False)
+    is_recursive = Column(Boolean, default=False)
+    granted_by = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"))
+    granted_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime(timezone=True))
+    is_active = Column(Boolean, default=True)
+
+    user = relationship("User", foreign_keys=[user_id], viewonly=True)
+    folder = relationship("DocFolder", viewonly=True)
+
+
+class WsPermission(Base):
+    __tablename__ = "ws_permission"
+
+    permission_id = Column(Integer, primary_key=True, autoincrement=True)
+    ws_id = Column(Integer, ForeignKey("workspace.ws_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(20), nullable=False, default="viewer")
+
+    workspace = relationship("Workspace", viewonly=True)
+    user = relationship("User", viewonly=True)
+
+
+class WsInvitation(Base):
+    __tablename__ = "ws_invitation"
+
+    invite_id = Column(Integer, primary_key=True, autoincrement=True)
+    ws_id = Column(Integer, ForeignKey("workspace.ws_id", ondelete="CASCADE"), nullable=False)
+    inviter_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    invitee_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    responded_at = Column(DateTime(timezone=True))
+
+    workspace = relationship("Workspace", viewonly=True)
+    inviter = relationship("User", foreign_keys=[inviter_id], viewonly=True)
+    invitee = relationship("User", foreign_keys=[invitee_id], viewonly=True)
+
+
+class SessionParticipant(Base):
+    __tablename__ = "session_participant"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(Integer, ForeignKey("chat_session.session_id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    role = Column(String(20), nullable=False, default="viewer")
+    joined_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    session = relationship("ChatSession", viewonly=True)
+    user = relationship("User", viewonly=True)
+
+
+class AccessRequest(Base):
+    __tablename__ = "access_request"
+
+    req_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
+    target_ws_id = Column(Integer, ForeignKey("workspace.ws_id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    approve_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    resolved_at = Column(DateTime(timezone=True))
+
+    user = relationship("User", foreign_keys=[user_id], viewonly=True)
+    workspace = relationship("Workspace", viewonly=True)

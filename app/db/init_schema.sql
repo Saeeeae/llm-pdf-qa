@@ -379,7 +379,6 @@ CREATE TABLE IF NOT EXISTS refresh_token (
     ip_address VARCHAR(45)
 );
 CREATE INDEX IF NOT EXISTS idx_refresh_token_user ON refresh_token(user_id);
-CREATE INDEX IF NOT EXISTS idx_refresh_token_hash ON refresh_token(token_hash);
 
 -- =============================================================================
 -- 21. User Preference
@@ -394,7 +393,7 @@ CREATE TABLE IF NOT EXISTS user_preference (
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS llm_config (
     id SERIAL PRIMARY KEY,
-    model_name VARCHAR(100) NOT NULL,
+    model_name VARCHAR(100) NOT NULL UNIQUE,
     vllm_url VARCHAR(255) NOT NULL DEFAULT 'http://vllm-server:8001/v1',
     system_prompt TEXT DEFAULT '당신은 사내 문서를 기반으로 답변하는 AI 어시스턴트입니다. 제공된 문서 내용을 바탕으로 정확하고 도움이 되는 답변을 제공하세요.',
     max_tokens INTEGER DEFAULT 4096,
@@ -419,11 +418,12 @@ CREATE TABLE IF NOT EXISTS web_search_log (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_web_search_log_user ON web_search_log(user_id);
+CREATE INDEX IF NOT EXISTS idx_web_search_log_session ON web_search_log(session_id);
 
 -- Seed: default LLM config
 INSERT INTO llm_config (model_name, vllm_url) VALUES
     ('qwen2.5-72b', 'http://vllm-server:8001/v1')
-    ON CONFLICT DO NOTHING;
+    ON CONFLICT (model_name) DO NOTHING;
 
 -- =============================================================================
 -- Views for Analytics
