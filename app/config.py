@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # HuggingFace
     hf_token: Optional[str] = None
 
+    # JWT
+    jwt_secret: str = "CHANGE_THIS_SECRET_IN_PRODUCTION_MIN_32_CHARS"
+    jwt_algorithm: str = "HS256"
+    jwt_access_expire_minutes: int = 15
+    jwt_refresh_expire_days: int = 7
+
     # MinerU
     mineru_api_url: str = "http://mineru-api:9000"
     mineru_backend: str = "hybrid-auto-engine"  # pipeline (CPU), hybrid-auto-engine (pipeline+VLM), vlm-auto-engine (VLM only)
