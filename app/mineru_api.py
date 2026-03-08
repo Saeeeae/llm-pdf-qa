@@ -91,8 +91,8 @@ def _parse_with_mineru(file_path: str, method: str, backend: str, lang: str) -> 
     """Run MinerU and return (full_markdown, pages_list, images_list)."""
     try:
         return _parse_via_api(file_path, method, backend, lang)
-    except ImportError:
-        logger.info("MinerU Python API not available, falling back to CLI")
+    except ImportError as e:
+        logger.warning("MinerU Python API not available (%s), falling back to CLI", e)
         return _parse_via_cli(file_path, method, backend, lang)
 
 
@@ -133,8 +133,14 @@ def _parse_via_cli(file_path: str, method: str, backend: str, lang: str) -> tupl
         text=True,
         timeout=600,
     )
+    if result.stdout:
+        logger.debug("MinerU CLI stdout: %s", result.stdout[-1000:])
+    if result.stderr:
+        logger.debug("MinerU CLI stderr: %s", result.stderr[-1000:])
     if result.returncode != 0:
-        raise RuntimeError(f"MinerU CLI failed: {result.stderr[:500]}")
+        raise RuntimeError(
+            f"MinerU CLI failed (exit {result.returncode}): {result.stderr[-500:]}"
+        )
     return _read_output(file_path, output_dir)
 
 

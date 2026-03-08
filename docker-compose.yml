@@ -38,6 +38,7 @@ services:
       dockerfile: Dockerfile.mineru
       args:
         MINERU_PIP_SPEC: ${MINERU_PIP_SPEC:-mineru[all]}
+        CUDA_INDEX: ${MINERU_CUDA_INDEX:-https://download.pytorch.org/whl/cu121}
     container_name: rag-mineru-api
     env_file: .env
     environment:
@@ -49,6 +50,13 @@ services:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
       - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
       - ${IMAGE_STORE_DIR:-/data/images}:/data/images
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"]
       interval: 30s
