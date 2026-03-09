@@ -5,22 +5,32 @@ from shared.db import get_session
 logger = logging.getLogger(__name__)
 
 
+def _build_access_conditions(search_scope: str, dept_id: int,
+                             accessible_folder_ids: list[int], params: dict) -> str:
+    """Build RBAC WHERE conditions. Shared by dense and sparse search."""
+    if search_scope == "dept":
+        params["dept_id"] = dept_id
+        return "d.dept_id = :dept_id"
+    elif search_scope == "folder" and accessible_folder_ids:
+        params["folder_ids"] = tuple(accessible_folder_ids)
+        return "d.folder_id IN :folder_ids"
+    else:
+        params["dept_id"] = dept_id
+        if accessible_folder_ids:
+            params["folder_ids"] = tuple(accessible_folder_ids)
+            return "(d.dept_id = :dept_id OR d.folder_id IN :folder_ids)"
+        else:
+            return "d.dept_id = :dept_id"
+
+
 def dense_search(query_vector: list[float], dept_id: int, accessible_folder_ids: list[int],
                  search_scope: str = "all", limit: int = 20) -> list[dict]:
     vec_str = "[" + ",".join(str(v) for v in query_vector) + "]"
     params = {"vec": vec_str, "lim": limit}
-    conditions = ["dc.embedding IS NOT NULL", "d.status = 'indexed'"]
 
-    if search_scope == "dept":
-        conditions.append("d.dept_id = :dept_id")
-        params["dept_id"] = dept_id
-    elif search_scope == "folder" and accessible_folder_ids:
-        conditions.append("d.folder_id = ANY(:folder_ids)")
-        params["folder_ids"] = accessible_folder_ids
-    else:
-        conditions.append("(d.dept_id = :dept_id OR d.folder_id = ANY(:folder_ids))")
-        params["dept_id"] = dept_id
-        params["folder_ids"] = accessible_folder_ids or []
+    conditions = ["dc.embedding IS NOT NULL", "d.status = 'indexed'"]
+    access_cond = _build_access_conditions(search_scope, dept_id, accessible_folder_ids, params)
+    conditions.append(access_cond)
 
     where = "WHERE " + " AND ".join(conditions)
     sql = text(f"""
@@ -43,18 +53,10 @@ def dense_search(query_vector: list[float], dept_id: int, accessible_folder_ids:
 def sparse_search(query_text: str, dept_id: int, accessible_folder_ids: list[int],
                   search_scope: str = "all", limit: int = 20) -> list[dict]:
     params = {"query": query_text, "lim": limit}
-    conditions = ["dc.tsv @@ plainto_tsquery('simple', :query)", "d.status = 'indexed'"]
 
-    if search_scope == "dept":
-        conditions.append("d.dept_id = :dept_id")
-        params["dept_id"] = dept_id
-    elif search_scope == "folder" and accessible_folder_ids:
-        conditions.append("d.folder_id = ANY(:folder_ids)")
-        params["folder_ids"] = accessible_folder_ids
-    else:
-        conditions.append("(d.dept_id = :dept_id OR d.folder_id = ANY(:folder_ids))")
-        params["dept_id"] = dept_id
-        params["folder_ids"] = accessible_folder_ids or []
+    conditions = ["dc.tsv @@ plainto_tsquery('simple', :query)", "d.status = 'indexed'"]
+    access_cond = _build_access_conditions(search_scope, dept_id, accessible_folder_ids, params)
+    conditions.append(access_cond)
 
     where = "WHERE " + " AND ".join(conditions)
     sql = text(f"""

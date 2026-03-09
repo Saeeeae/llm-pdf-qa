@@ -14,7 +14,7 @@ app = FastAPI(title="RAG Serving API", version="2.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,7 +24,8 @@ app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["chat"])
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["admin"])
 
-app.mount("/admin", StaticFiles(directory=_ADMIN_DIR, html=True), name="admin")
+if os.path.isdir(_ADMIN_DIR) and any(f.endswith(".html") for f in os.listdir(_ADMIN_DIR)):
+    app.mount("/admin", StaticFiles(directory=_ADMIN_DIR, html=True), name="admin")
 
 
 @app.get("/health")

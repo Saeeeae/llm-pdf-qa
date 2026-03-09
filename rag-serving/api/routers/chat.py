@@ -16,7 +16,7 @@ from rag_serving.api.rag.generator import build_messages, stream_response
 from rag_serving.config import serving_settings
 from shared.models.orm import (
     AuditLog, ChatMessage, ChatSession, LLMConfig, MsgRef,
-    QueryLog, Role, User, UserPreference,
+    QueryLog, User, UserPreference,
 )
 from shared.models.registry import registry
 from shared.db import get_session
