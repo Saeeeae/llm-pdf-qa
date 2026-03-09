@@ -88,6 +88,15 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
-.claude/*
+# Data directories (Docker volumes)
+data/
 .docker_data/
+
+# Node modules
+node_modules/
+
+# Claude
+.claude/*
+
+# Legacy
 init.sql

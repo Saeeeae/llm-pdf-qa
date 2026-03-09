@@ -1,54 +1,35 @@
+# docker-compose.yml (root) — v2 monorepo orchestration
+include:
+  - docker-compose.base.yml
+
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    container_name: rag-postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-rag_system}
-      POSTGRES_USER: ${POSTGRES_USER:-admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-    ports:
-      - "5432:5432"
-    volumes:
-      - ${POSTGRES_DATA_DIR:-/data/db/postgres}:/var/lib/postgresql/data
-      - ./app/db/init_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    container_name: rag-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - ${REDIS_DATA_DIR:-/data/db/redis}:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-    restart: unless-stopped
-
-  mineru-api:
+  # rag-pipeline services
+  pipeline-api:
     build:
       context: .
-      dockerfile: Dockerfile.mineru
-      args:
-        MINERU_PIP_SPEC: ${MINERU_PIP_SPEC:-mineru[all]}
-        CUDA_INDEX: ${MINERU_CUDA_INDEX:-https://download.pytorch.org/whl/cu121}
-    container_name: rag-mineru-api
-    env_file: .env
-    environment:
-      - PYTHONPATH=/app
-      - MINERU_OUTPUT_DIR=/data/images/_mineru_tmp
+      dockerfile: rag-pipeline/Dockerfile
+    container_name: rag-pipeline-api
+    command: uvicorn rag_pipeline.api.main:app --host 0.0.0.0 --port 8001
     ports:
-      - "9000:9000"
+      - "8001:8001"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pipeline-worker:
+    build:
+      context: .
+      dockerfile: rag-pipeline/Dockerfile
+    container_name: rag-pipeline-worker
+    command: celery -A rag_pipeline.tasks.celery_app worker --loglevel=info -Q pipeline --concurrency=2
+    env_file: .env
     volumes:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
-      - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
+      - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
       - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     deploy:
       resources:
@@ -57,79 +38,56 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    restart: unless-stopped
-
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    container_name: rag-api
-    command: >
-      uvicorn app.api.main:app
-      --host 0.0.0.0
-      --port 8000
-      --workers 2
-    env_file: .env
-    environment:
-      - PYTHONPATH=/app
-    ports:
-      - "${API_PORT:-8000}:8000"
-    volumes:
-      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents
-      - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
-      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      mineru-api:
-        condition: service_healthy
     restart: unless-stopped
 
-  celery-worker:
+  mineru-api:
     build:
       context: .
-      dockerfile: Dockerfile.worker
-    container_name: rag-celery-worker
-    command: >
-      celery -A app.tasks.celery_app worker
-      --loglevel=info
-      -Q default,ingest,sync
-      --concurrency=2
+      dockerfile: Dockerfile.mineru
+    container_name: rag-mineru-api
     env_file: .env
-    environment:
-      - PYTHONPATH=/app
+    ports:
+      - "9000:9000"
     volumes:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
+      - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # rag-serving services
+  serving-api:
+    build:
+      context: .
+      dockerfile: rag-serving/Dockerfile.api
+    container_name: rag-serving-api
+    command: uvicorn rag_serving.api.main:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    env_file: .env
+    volumes:
       - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
-      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
+      - ${RERANKER_MODEL_DIR:-/data/models/reranker}:/models/reranker:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
-      mineru-api:
-        condition: service_healthy
-    restart: unless-stopped
-
-  celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile.beat
-    container_name: rag-celery-beat
-    command: >
-      celery -A app.tasks.celery_app beat
-      --loglevel=info
-    env_file: .env
-    environment:
-      - PYTHONPATH=/app
-    depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -145,12 +103,9 @@ services:
       --gpu-memory-utilization ${VLLM_GPU_MEM_UTIL:-0.90}
       --max-model-len ${VLLM_MAX_MODEL_LEN:-32768}
       --served-model-name ${VLLM_SERVED_MODEL_NAME:-qwen2.5-72b}
-      --host 0.0.0.0
-      --port 8001
+      --host 0.0.0.0 --port 8000
     ports:
-      - "8001:8001"
-    environment:
-      - HF_TOKEN=${HF_TOKEN:-}
+      - "8000:8000"
     volumes:
       - ${VLLM_MODEL_DIR:-/data/models/vllm}:/root/.cache/huggingface
     deploy:
@@ -164,15 +119,44 @@ services:
     profiles:
       - gpu
 
+  # rag-sync-monitor
+  sync-scheduler:
+    build:
+      context: .
+      dockerfile: rag-sync-monitor/Dockerfile
+    container_name: rag-sync-scheduler
+    command: python -m rag_sync_monitor.scheduler.cron_sync
+    env_file: .env
+    volumes:
+      - ${DOC_WATCH_DIR:-/data/documents}:/mnt/nas/documents:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sync-dashboard:
+    build:
+      context: .
+      dockerfile: rag-sync-monitor/Dockerfile
+    container_name: rag-sync-dashboard
+    command: streamlit run rag_sync_monitor/dashboard/app.py --server.port=8003 --server.headless=true
+    ports:
+      - "8003:8003"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Frontend
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8002}
     container_name: rag-frontend
     ports:
       - "3000:3000"
     depends_on:
-      - api
+      - serving-api
     restart: unless-stopped

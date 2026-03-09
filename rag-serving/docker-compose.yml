@@ -1,0 +1,53 @@
+services:
+  serving-api:
+    build:
+      context: ..
+      dockerfile: rag-serving/Dockerfile.api
+    container_name: rag-serving-api
+    command: uvicorn rag_serving.api.main:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    env_file: ../.env
+    volumes:
+      - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
+      - ${RERANKER_MODEL_DIR:-/data/models/reranker}:/models/reranker:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  vllm-server:
+    image: vllm/vllm-openai:latest
+    container_name: rag-vllm
+    command: >
+      python -m vllm.entrypoints.openai.api_server
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-72B-Instruct-AWQ}
+      --quantization ${VLLM_QUANTIZATION:-awq}
+      --tensor-parallel-size ${VLLM_TENSOR_PARALLEL:-1}
+      --gpu-memory-utilization ${VLLM_GPU_MEM_UTIL:-0.90}
+      --max-model-len ${VLLM_MAX_MODEL_LEN:-32768}
+      --served-model-name ${VLLM_SERVED_MODEL_NAME:-qwen2.5-72b}
+      --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${VLLM_MODEL_DIR:-/data/models/vllm}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${VLLM_GPU_COUNT:-1}
+              capabilities: [gpu]
+    restart: unless-stopped
+    profiles:
+      - gpu
