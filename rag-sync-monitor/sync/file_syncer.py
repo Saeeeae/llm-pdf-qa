@@ -112,7 +112,7 @@ def sync_directory(scan_path: str, dept_id: int = 1, role_id: int = 3) -> SyncRe
             # Find deleted files (in DB but not on disk)
             for path, doc in db_by_path.items():
                 if path not in scanned:
-                    doc.status = "deleted"
+                    doc.status = "failed"
                     doc.error_msg = "File removed from source"
                     doc.updated_at = datetime.now(timezone.utc)
                     result.files_deleted += 1

@@ -8,3 +8,4 @@ httpx>=0.25.0
 apscheduler>=3.10.0
 paramiko>=3.3.0
 passlib[bcrypt]>=1.7.4
+pgvector>=0.2.0

@@ -79,6 +79,9 @@ def login(req: LoginRequest, request: Request):
         role = session.query(Role).filter(Role.role_id == user.role_id).first()
         dept = session.query(Department).filter(Department.dept_id == user.dept_id).first()
 
+        if not role:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="User role not found")
+
         access_token = create_access_token(user.user_id, role.auth_level)
         refresh_token_str = create_refresh_token(user.user_id)
 
@@ -130,7 +133,7 @@ def refresh_token(req: RefreshRequest):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
         role = session.query(Role).filter(Role.role_id == user.role_id).first()
-        access_token = create_access_token(user.user_id, role.auth_level)
+        access_token = create_access_token(user.user_id, role.auth_level if role else 0)
 
     return AccessTokenResponse(access_token=access_token)
 

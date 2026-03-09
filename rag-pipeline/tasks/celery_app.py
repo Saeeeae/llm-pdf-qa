@@ -10,4 +10,5 @@ app.conf.update(
     accept_content=["json"],
     timezone="Asia/Seoul",
     task_routes={"rag_pipeline.tasks.*": {"queue": "pipeline"}},
+    include=["rag_pipeline.tasks.pipeline_tasks"],
 )

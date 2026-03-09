@@ -7,7 +7,8 @@ logger = logging.getLogger(__name__)
 
 def dense_search(query_vector: list[float], dept_id: int, accessible_folder_ids: list[int],
                  search_scope: str = "all", limit: int = 20) -> list[dict]:
-    params = {"vec": query_vector, "lim": limit}
+    vec_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+    params = {"vec": vec_str, "lim": limit}
     conditions = ["dc.embedding IS NOT NULL", "d.status = 'indexed'"]
 
     if search_scope == "dept":
@@ -25,12 +26,12 @@ def dense_search(query_vector: list[float], dept_id: int, accessible_folder_ids:
     sql = text(f"""
         SELECT dc.chunk_id, dc.doc_id, dc.chunk_idx, dc.content,
                dc.chunk_type, dc.page_number,
-               1 - (dc.embedding <=> :vec::vector) AS dense_score,
+               1 - (dc.embedding <=> CAST(:vec AS vector)) AS dense_score,
                d.file_name
         FROM doc_chunk dc
         JOIN document d ON dc.doc_id = d.doc_id
         {where}
-        ORDER BY dc.embedding <=> :vec::vector
+        ORDER BY dc.embedding <=> CAST(:vec AS vector)
         LIMIT :lim
     """)
 
