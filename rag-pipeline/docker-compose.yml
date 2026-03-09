@@ -25,6 +25,13 @@ services:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
       - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
       - ${IMAGE_STORE_DIR:-/data/images}:/data/images
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       postgres:
         condition: service_healthy
