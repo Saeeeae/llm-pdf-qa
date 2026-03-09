@@ -1,0 +1,54 @@
+services:
+  pipeline-api:
+    build:
+      context: ..
+      dockerfile: rag-pipeline/Dockerfile
+    container_name: rag-pipeline-api
+    ports:
+      - "8001:8001"
+    env_file: ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  pipeline-worker:
+    build:
+      context: ..
+      dockerfile: rag-pipeline/Dockerfile
+    container_name: rag-pipeline-worker
+    command: celery -A rag_pipeline.tasks.celery_app worker --loglevel=info -Q pipeline --concurrency=2
+    env_file: ../.env
+    volumes:
+      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
+      - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mineru-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.mineru
+    container_name: rag-mineru-api
+    env_file: ../.env
+    ports:
+      - "9000:9000"
+    volumes:
+      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
+      - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
