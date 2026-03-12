@@ -8,10 +8,13 @@ from sqlalchemy import func, text
 from rag_serving.api.auth.dependencies import get_current_user, require_admin
 from rag_serving.api.auth.password import hash_password
 from shared.models.orm import (
-    AuditLog, Department, Document, LLMConfig, PipelineLog,
-    QueryLog, Role, User,
+    AuditLog, Department, Document, EventLog, LLMConfig, PipelineLog,
+    QueryLog, Role, SyncLog, User,
 )
 from shared.db import get_session
+from shared.event_logger import get_event_logger
+
+elog = get_event_logger("admin")
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -388,3 +391,142 @@ def top_users(limit: int = 10, admin: User = Depends(require_admin)):
                 query_count=r.cnt,
             ))
         return result
+
+
+# --- Event Logs (general-purpose, all modules) ---
+
+class EventLogItem(BaseModel):
+    id: int
+    trace_id: str | None
+    module: str
+    event_type: str
+    severity: str
+    user_id: int | None
+    session_id: int | None
+    doc_id: int | None
+    message: str
+    details: dict | None
+    duration_ms: int | None
+    ip_address: str | None
+    created_at: str
+
+
+@router.get("/event-logs", response_model=list[EventLogItem])
+def list_event_logs(
+    limit: int = 50,
+    offset: int = 0,
+    module: str | None = Query(None, description="Filter by module: pipeline, serving, sync, system, admin"),
+    event_type: str | None = Query(None, description="Filter by event_type: info, error, stage_start, stage_end, etc."),
+    severity: str | None = Query(None, description="Filter by severity: debug, info, warning, error, critical"),
+    trace_id: str | None = Query(None, description="Filter by trace_id for request correlation"),
+    doc_id: int | None = Query(None, description="Filter by document ID"),
+    user_id: int | None = Query(None, description="Filter by user ID"),
+    admin_user: User = Depends(require_admin),
+):
+    with get_session() as session:
+        q = session.query(EventLog).order_by(EventLog.created_at.desc())
+        if module:
+            q = q.filter(EventLog.module == module)
+        if event_type:
+            q = q.filter(EventLog.event_type == event_type)
+        if severity:
+            q = q.filter(EventLog.severity == severity)
+        if trace_id:
+            q = q.filter(EventLog.trace_id == trace_id)
+        if doc_id:
+            q = q.filter(EventLog.doc_id == doc_id)
+        if user_id:
+            q = q.filter(EventLog.user_id == user_id)
+        logs = q.offset(offset).limit(limit).all()
+        return [
+            EventLogItem(
+                id=l.id, trace_id=l.trace_id, module=l.module,
+                event_type=l.event_type, severity=l.severity,
+                user_id=l.user_id, session_id=l.session_id, doc_id=l.doc_id,
+                message=l.message, details=l.details,
+                duration_ms=l.duration_ms, ip_address=l.ip_address,
+                created_at=l.created_at.isoformat(),
+            )
+            for l in logs
+        ]
+
+
+# --- Sync Logs ---
+
+class SyncLogItem(BaseModel):
+    id: int
+    sync_type: str | None
+    started_at: str | None
+    finished_at: str | None
+    files_added: int
+    files_modified: int
+    files_deleted: int
+    users_added: int
+    status: str | None
+    error_message: str | None
+
+
+@router.get("/sync-logs", response_model=list[SyncLogItem])
+def list_sync_logs(
+    limit: int = 50,
+    offset: int = 0,
+    sync_type: str | None = None,
+    status: str | None = None,
+    admin_user: User = Depends(require_admin),
+):
+    with get_session() as session:
+        q = session.query(SyncLog).order_by(SyncLog.started_at.desc())
+        if sync_type:
+            q = q.filter(SyncLog.sync_type == sync_type)
+        if status:
+            q = q.filter(SyncLog.status == status)
+        logs = q.offset(offset).limit(limit).all()
+        return [
+            SyncLogItem(
+                id=l.id, sync_type=l.sync_type,
+                started_at=l.started_at.isoformat() if l.started_at else None,
+                finished_at=l.finished_at.isoformat() if l.finished_at else None,
+                files_added=l.files_added or 0, files_modified=l.files_modified or 0,
+                files_deleted=l.files_deleted or 0, users_added=l.users_added or 0,
+                status=l.status, error_message=l.error_message,
+            )
+            for l in logs
+        ]
+
+
+# --- Module Stats (aggregated from event_log) ---
+
+class ModuleStatItem(BaseModel):
+    module: str
+    total_events: int
+    errors: int
+    warnings: int
+    avg_duration_ms: float | None
+
+
+@router.get("/stats/modules", response_model=list[ModuleStatItem])
+def module_stats(days: int = 7, admin_user: User = Depends(require_admin)):
+    with get_session() as session:
+        rows = session.execute(
+            text("""
+                SELECT module,
+                       COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE severity = 'error') AS errors,
+                       COUNT(*) FILTER (WHERE severity = 'warning') AS warnings,
+                       AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL) AS avg_dur
+                FROM event_log
+                WHERE created_at >= NOW() - INTERVAL ':days days'
+                GROUP BY module
+                ORDER BY total DESC
+            """.replace(":days", str(int(days))))
+        ).fetchall()
+        return [
+            ModuleStatItem(
+                module=r.module,
+                total_events=r.total,
+                errors=r.errors,
+                warnings=r.warnings,
+                avg_duration_ms=round(r.avg_dur, 1) if r.avg_dur else None,
+            )
+            for r in rows
+        ]

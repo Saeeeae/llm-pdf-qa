@@ -1,10 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from shared.db import get_session
+from shared.event_logger import get_event_logger
+from shared.middleware import RequestLoggingMiddleware
 from shared.models.orm import Document, PipelineLog
 from rag_pipeline.tasks.pipeline_tasks import process_document_task, process_batch_task
 
+elog = get_event_logger("pipeline")
+
 app = FastAPI(title="RAG Pipeline API", version="2.0")
+app.add_middleware(RequestLoggingMiddleware)
 
 
 class TriggerRequest(BaseModel):
@@ -21,6 +26,7 @@ def trigger_pipeline(req: TriggerRequest):
     if not req.doc_ids:
         raise HTTPException(400, "No doc_ids provided")
     process_batch_task.delay(req.doc_ids)
+    elog.info("Pipeline triggered", details={"doc_ids": req.doc_ids[:20], "count": len(req.doc_ids)})
     return TriggerResponse(message="Pipeline triggered", doc_ids=req.doc_ids)
 
 
@@ -32,6 +38,7 @@ def trigger_full_reprocess():
     if not doc_ids:
         raise HTTPException(404, "No documents found")
     process_batch_task.delay(doc_ids)
+    elog.info("Full reprocess triggered", details={"count": len(doc_ids)})
     return TriggerResponse(message="Full reprocess triggered", doc_ids=doc_ids)
 
 

@@ -1,3 +1,5 @@
+# torch is pre-installed with CUDA in Dockerfile — pin to prevent CPU overwrite
+torch>=2.5.0
 fastapi>=0.104.0
 uvicorn>=0.24.0
 sqlalchemy>=2.0.0

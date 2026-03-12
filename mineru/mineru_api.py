@@ -38,7 +38,7 @@ class ParseResponse(BaseModel):
     total_pages: int
     pages: list[dict]  # [{"page_num": 1, "text": "..."}, ...]
     metadata: dict
-    images: list[dict] = []  # NEW
+    images: list[dict] = []
 
 
 @app.get("/health")
@@ -182,7 +182,7 @@ def _read_output(file_path: str, output_dir: str) -> tuple[str, list[dict], list
         if text.strip()
     ]
 
-    # NEW: collect images from images/ directory
+    # Collect images from images/ directory
     images = []
     images_dir = md_path.parent / "images"
     if images_dir.is_dir():

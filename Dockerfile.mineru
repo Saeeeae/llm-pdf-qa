@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 WORKDIR /app
 
@@ -11,7 +11,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 ARG MINERU_PIP_SPEC="mineru[all]"
 # CUDA wheel index — change if your host CUDA version differs
 # cu118 / cu121 / cu124 etc.
-ARG CUDA_INDEX="https://download.pytorch.org/whl/cu121"
+ARG CUDA_INDEX="https://download.pytorch.org/whl/cu124"
 
 # Kakao apt mirror + system deps + Python 3.10
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirror.kakao.com/ubuntu|g' /etc/apt/sources.list \
@@ -40,16 +40,16 @@ RUN pip3 install --no-cache-dir torch torchvision torchaudio \
     --index-url "$CUDA_INDEX"
 
 # 2) Install MinerU + API server
-COPY requirements/ ./requirements/
+COPY mineru/requirements.txt ./requirements.txt
 RUN pip3 install --no-cache-dir "$MINERU_PIP_SPEC" \
-    && pip3 install --no-cache-dir -r requirements/mineru.txt \
+    && pip3 install --no-cache-dir -r requirements.txt \
     && rm -rf /root/.cache /tmp/*
 
-COPY app/mineru_api.py ./app/mineru_api.py
+COPY mineru/mineru_api.py ./mineru/mineru_api.py
 
 EXPOSE 9000
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
     CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=5)"
 
-CMD ["python3", "-m", "uvicorn", "app.mineru_api:app", "--host", "0.0.0.0", "--port", "9000", "--workers", "1"]
+CMD ["python3", "-m", "uvicorn", "mineru.mineru_api:app", "--host", "0.0.0.0", "--port", "9000", "--workers", "1"]

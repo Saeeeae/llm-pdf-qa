@@ -369,6 +369,31 @@ CREATE TABLE IF NOT EXISTS system_health (
 CREATE INDEX idx_system_health_service ON system_health(service_name);
 CREATE INDEX idx_system_health_checked_at ON system_health(checked_at DESC);
 
+-- 28. Event Log (general-purpose extensible event log for all modules)
+CREATE TABLE IF NOT EXISTS event_log (
+    id SERIAL PRIMARY KEY,
+    trace_id VARCHAR(32),
+    module VARCHAR(30) NOT NULL,
+    event_type VARCHAR(30) NOT NULL,
+    severity VARCHAR(10) NOT NULL,
+    user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+    session_id INTEGER REFERENCES chat_session(session_id) ON DELETE SET NULL,
+    doc_id INTEGER REFERENCES document(doc_id) ON DELETE SET NULL,
+    message TEXT NOT NULL,
+    details JSONB,
+    duration_ms INTEGER,
+    ip_address VARCHAR(45),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_event_log_trace ON event_log(trace_id);
+CREATE INDEX idx_event_log_module ON event_log(module);
+CREATE INDEX idx_event_log_event_type ON event_log(event_type);
+CREATE INDEX idx_event_log_severity ON event_log(severity);
+CREATE INDEX idx_event_log_created_at ON event_log(created_at DESC);
+CREATE INDEX idx_event_log_module_type ON event_log(module, event_type);
+CREATE INDEX idx_event_log_user ON event_log(user_id);
+CREATE INDEX idx_event_log_doc ON event_log(doc_id);
+
 -- Triggers
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$

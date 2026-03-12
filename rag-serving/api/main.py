@@ -6,12 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from rag_serving.api.routers import auth, chat, admin
+from shared.middleware import RequestLoggingMiddleware
 
 _BASE_DIR = Path(os.path.abspath(__file__)).resolve().parent.parent  # rag_serving/
 _ADMIN_DIR = str(_BASE_DIR / "admin")
 
 app = FastAPI(title="RAG Serving API", version="2.0")
 
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],

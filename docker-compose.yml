@@ -56,6 +56,7 @@ services:
     volumes:
       - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
       - ${MINERU_MODEL_DIR:-/data/models/mineru}:/root/.cache/mineru
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     deploy:
       resources:
         reservations:

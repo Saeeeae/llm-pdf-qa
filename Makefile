@@ -1,104 +1,129 @@
-.PHONY: up down build init-db ingest sync status logs clean init download-models build-beat
+# =============================================================================
+# On-Premise RAG-LLM System v2 — Makefile
+# =============================================================================
 
-# === Setup ===
+.PHONY: help up down restart ps logs build clean \
+        up-gpu up-infra up-pipeline up-serving up-sync up-frontend \
+        logs-pipeline logs-serving logs-sync logs-vllm logs-mineru \
+        shell-pipeline shell-serving shell-sync shell-db \
+        db-psql db-reset init test lint
 
-init:
-	@echo "Creating /data directory structure..."
-	sudo mkdir -p /data/db/postgres /data/db/redis
-	sudo mkdir -p /data/documents
-	sudo mkdir -p /data/images
-	sudo mkdir -p /data/models/embedding /data/models/mineru /data/models/llm /data/models/vlm
-	sudo chown -R $$(id -u):$$(id -g) /data
-	@echo "Done. Next: make download-models"
+# Default
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-download-models:
-	./scripts/download_models.sh all
+# ─── Docker Compose ──────────────────────────────────────────────────────────
 
-download-embedding:
-	./scripts/download_models.sh embedding
+up: ## Start all services (CPU mode)
+	docker compose up -d
 
-download-mineru:
-	./scripts/download_models.sh mineru
+up-gpu: ## Start all services including vLLM (GPU mode)
+	docker compose --profile gpu up -d
 
-# === Docker Compose Commands ===
+up-infra: ## Start infrastructure only (PostgreSQL, Neo4j, Redis)
+	docker compose -f docker-compose.base.yml up -d
 
-up:
-	docker compose up -d --build
+up-pipeline: ## Start pipeline services
+	docker compose up -d pipeline-api pipeline-worker mineru-api
 
-down:
-	docker compose down
+up-serving: ## Start serving services
+	docker compose up -d serving-api
 
-build:
+up-sync: ## Start sync/monitor services
+	docker compose up -d sync-scheduler sync-dashboard
+
+up-frontend: ## Start frontend
+	docker compose up -d frontend
+
+down: ## Stop all services
+	docker compose --profile gpu down
+
+restart: ## Restart all services
+	docker compose --profile gpu down && docker compose up -d
+
+build: ## Build all images
 	docker compose build
 
-build-api:
-	docker compose build api
-
-build-worker:
-	docker compose build celery-worker
-
-build-beat:
-	docker compose build celery-beat
-
-build-mineru:
-	docker compose build mineru-api
-
-# === Database ===
-
-init-db:
-	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system} \
-		-f /docker-entrypoint-initdb.d/01_schema.sql
-
-# === Pipeline Commands ===
-
-ingest:
-	docker compose exec celery-worker python -m app.main ingest
-
-ingest-file:
-	@test -n "$(FILE)" || (echo "Usage: make ingest-file FILE=/data/documents/example.pdf" && exit 1)
-	docker compose exec celery-worker python -m app.main ingest --file $(FILE)
-
-sync:
-	docker compose exec celery-worker python -m app.main sync
-
-scan:
-	docker compose exec celery-worker python -m app.main scan
-
-scan-pdf:
-	docker compose exec celery-worker python -m app.main scan --pattern "**/*.pdf"
-
-scan-ingest:
-	docker compose exec celery-worker python -m app.main scan --ingest
-
-status:
-	docker compose exec celery-worker python -m app.main status
-
-# === Monitoring ===
-
-logs:
-	docker compose logs -f api celery-worker celery-beat mineru-api
-
-logs-api:
-	docker compose logs -f api
-
-logs-worker:
-	docker compose logs -f celery-worker celery-beat
-
-logs-mineru:
-	docker compose logs -f mineru-api
-
-logs-all:
-	docker compose logs -f
-
-ps:
+ps: ## Show running containers
 	docker compose ps
 
-# === Cleanup ===
+# ─── Logs ─────────────────────────────────────────────────────────────────────
 
-clean:
-	docker compose down -v
-	@echo "All containers stopped. Note: /data is preserved."
+logs: ## Tail all logs
+	docker compose logs -f --tail=100
 
-clean-all:
-	docker compose down -v
-	@echo "WARNING: This does NOT delete /data. To remove: sudo rm -rf /data/db"
+logs-pipeline: ## Tail pipeline logs (API + Worker)
+	docker compose logs -f --tail=100 pipeline-api pipeline-worker
+
+logs-serving: ## Tail serving API logs
+	docker compose logs -f --tail=100 serving-api
+
+logs-sync: ## Tail sync/monitor logs
+	docker compose logs -f --tail=100 sync-scheduler sync-dashboard
+
+logs-vllm: ## Tail vLLM logs
+	docker compose logs -f --tail=100 vllm-server
+
+logs-mineru: ## Tail MinerU logs
+	docker compose logs -f --tail=100 mineru-api
+
+# ─── Shell Access ─────────────────────────────────────────────────────────────
+
+shell-pipeline: ## Open shell in pipeline-api container
+	docker compose exec pipeline-api bash
+
+shell-serving: ## Open shell in serving-api container
+	docker compose exec serving-api bash
+
+shell-sync: ## Open shell in sync-scheduler container
+	docker compose exec sync-scheduler bash
+
+shell-db: ## Open psql in PostgreSQL container
+	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system}
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+
+db-psql: ## Connect to PostgreSQL via psql
+	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system}
+
+db-reset: ## Reset database (drop + recreate from init.sql)
+	@echo "WARNING: This will destroy all data!"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -c "DROP DATABASE IF EXISTS $${POSTGRES_DB:-rag_system}"
+	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -c "CREATE DATABASE $${POSTGRES_DB:-rag_system}"
+	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system} -f /docker-entrypoint-initdb.d/01_init.sql
+
+# ─── Init ─────────────────────────────────────────────────────────────────────
+
+init: ## First-time setup: copy .env, build, start
+	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example — edit it before starting!")
+	docker compose build
+	docker compose up -d
+	@echo ""
+	@echo "Services starting... check with: make ps"
+	@echo "Next: edit .env passwords, then run: make restart"
+
+# ─── Development ──────────────────────────────────────────────────────────────
+
+dev-infra: ## Start infra + run services locally
+	docker compose -f docker-compose.base.yml up -d
+	@echo ""
+	@echo "Infrastructure ready. Run services locally:"
+	@echo "  uvicorn rag_pipeline.api.main:app --port 8001 --reload"
+	@echo "  uvicorn rag_serving.api.main:app --port 8002 --reload"
+	@echo "  streamlit run rag_sync_monitor/dashboard/app.py --server.port 8003"
+	@echo "  cd frontend && npm run dev"
+
+test: ## Run tests
+	python -m pytest tests/ -v
+
+lint: ## Run linter
+	python -m ruff check .
+
+# ─── Cleanup ──────────────────────────────────────────────────────────────────
+
+clean: ## Remove all containers, volumes, and images
+	@echo "WARNING: This will remove all containers, volumes, and built images!"
+	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
+	docker compose --profile gpu down -v --rmi local

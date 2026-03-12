@@ -20,8 +20,10 @@ from shared.models.orm import (
 )
 from shared.models.registry import registry
 from shared.db import get_session
+from shared.event_logger import get_event_logger
 
 logger = logging.getLogger(__name__)
+elog = get_event_logger("serving")
 router = APIRouter()
 
 
@@ -89,6 +91,8 @@ def create_session(req: CreateSessionRequest, user: User = Depends(get_current_u
         )
         session.add(chat_session)
         session.flush()
+        elog.info("Session created", user_id=user.user_id,
+                  session_id=chat_session.session_id)
         return SessionResponse(
             session_id=chat_session.session_id,
             title=chat_session.title,
@@ -148,6 +152,7 @@ def delete_session(session_id: int, user: User = Depends(get_current_user)):
         if not chat_session:
             raise HTTPException(status_code=404, detail="Session not found")
         session.delete(chat_session)
+    elog.info("Session deleted", user_id=user.user_id, session_id=session_id)
 
 
 @router.post("/sessions/{session_id}/stream")
@@ -163,20 +168,28 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
         messages_history = sorted(chat_session.messages, key=lambda x: x.created_at)[-20:]
         history = [{"role": m.sender_type, "content": m.message} for m in messages_history]
 
+    elog.info("Chat query started", user_id=user.user_id, session_id=session_id,
+             details={"prompt": req.message[:200], "search_scope": req.search_scope,
+                       "web_search": req.use_web_search})
+
     def generate():
         full_response = ""
         context_chunks = []
         reranked_chunks = []
         graph_ctx = ""
         assistant_msg_id = None
+        token_count_out = 0
         start_time = time.time()
 
         try:
             # Embed query
+            embed_start = time.perf_counter()
             embed_model = registry.embedding()
             query_vector = embed_model.encode(req.message).tolist()
+            embed_ms = int((time.perf_counter() - embed_start) * 1000)
 
             # Hybrid search (dense + sparse with RRF)
+            search_start = time.perf_counter()
             accessible_folders = _get_accessible_folder_ids(user.user_id)
             context_chunks = hybrid_search(
                 query_text=req.message,
@@ -185,13 +198,18 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 accessible_folder_ids=accessible_folders,
                 search_scope=req.search_scope,
             )
+            search_ms = int((time.perf_counter() - search_start) * 1000)
 
             # Rerank
+            rerank_start = time.perf_counter()
             llm_config = _get_active_llm_config()
             reranked_chunks = rerank(req.message, context_chunks, top_k=llm_config.context_chunks)
+            rerank_ms = int((time.perf_counter() - rerank_start) * 1000)
 
             # Graph context
+            graph_start = time.perf_counter()
             graph_ctx = get_graph_context(req.message)
+            graph_ms = int((time.perf_counter() - graph_start) * 1000)
 
             # Build messages with graph context
             llm_messages = build_messages(
@@ -201,6 +219,10 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 chat_history=history,
                 user_message=req.message,
             )
+
+            # Estimate input tokens (rough: 1 token ~ 4 chars for mixed ko/en)
+            input_text = json.dumps(llm_messages, ensure_ascii=False)
+            token_count_in = len(input_text) // 4
 
             # Stream from vLLM
             for token in stream_response(
@@ -212,6 +234,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 top_p=llm_config.top_p,
             ):
                 full_response += token
+                token_count_out += 1
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
             # Send references
@@ -262,7 +285,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                         s.title = req.message[:50]
                     s.updated_at = datetime.now(timezone.utc)
 
-                # Log to query_logs
+                # Log to query_logs (with token counts)
                 db_session.add(QueryLog(
                     user_id=user.user_id,
                     session_id=session_id,
@@ -279,6 +302,8 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                     final_answer=full_response[:2000],
                     model_name=llm_config.model_name,
                     latency_ms=latency_ms,
+                    token_count_in=token_count_in,
+                    token_count_out=token_count_out,
                 ))
 
                 db_session.add(AuditLog(
@@ -289,10 +314,33 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                     description=req.message[:200],
                 ))
 
+            # Event log with full timing breakdown
+            elog.info("Chat query complete", user_id=user.user_id, session_id=session_id,
+                      duration_ms=latency_ms, details={
+                          "prompt": req.message[:200],
+                          "answer_length": len(full_response),
+                          "retrieved_count": len(context_chunks),
+                          "reranked_count": len(reranked_chunks),
+                          "has_graph_context": bool(graph_ctx),
+                          "model": llm_config.model_name,
+                          "token_in": token_count_in,
+                          "token_out": token_count_out,
+                          "timing": {
+                              "embed_ms": embed_ms,
+                              "search_ms": search_ms,
+                              "rerank_ms": rerank_ms,
+                              "graph_ms": graph_ms,
+                              "total_ms": latency_ms,
+                          },
+                      })
+
             yield f"data: {json.dumps({'type': 'done', 'msg_id': assistant_msg_id})}\n\n"
 
         except Exception as e:
-            logger.error("Stream chat error: %s", e)
+            latency_ms = int((time.time() - start_time) * 1000)
+            elog.error("Chat query failed", user_id=user.user_id, session_id=session_id,
+                       error=e, duration_ms=latency_ms,
+                       details={"prompt": req.message[:200]})
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
     return StreamingResponse(

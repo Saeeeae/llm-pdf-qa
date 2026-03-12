@@ -18,8 +18,9 @@ build
 .env
 .env.*
 *.log
-documents
-scripts
 .claude
 tmp
 *.sqlite3
+node_modules
+data
+.docker_data

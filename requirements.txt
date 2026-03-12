@@ -1,3 +1,0 @@
-# Backward-compatible entrypoint for local installs.
-# API image uses requirements/api.txt, worker image uses requirements/worker.txt.
--r requirements/api.txt

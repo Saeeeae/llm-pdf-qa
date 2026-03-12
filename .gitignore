@@ -38,7 +38,7 @@ ENV/
 .env
 .env.local
 
-# Model files (너무 커서 GitHub에 올리지 않음)
+# Model files
 models/
 *.bin
 *.safetensors
@@ -53,9 +53,6 @@ cache/
 # Docker
 *.log
 
-# Document watch directory
-documents/
-
 # Jupyter Notebook
 .ipynb_checkpoints
 
@@ -68,11 +65,7 @@ htmlcov/
 .DS_Store
 .AppleDouble
 .LSOverride
-
-# Thumbnails
 ._*
-
-# Files that might appear in the root of a volume
 .DocumentRevisions-V100
 .fseventsd
 .Spotlight-V100
@@ -80,8 +73,6 @@ htmlcov/
 .Trashes
 .VolumeIcon.icns
 .com.apple.timemachine.donotpresent
-
-# Directories potentially created on remote AFP share
 .AppleDB
 .AppleDesktop
 Network Trash Folder
@@ -97,6 +88,3 @@ node_modules/
 
 # Claude
 .claude/*
-
-# Legacy
-init.sql
