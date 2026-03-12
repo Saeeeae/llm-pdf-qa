@@ -9,7 +9,14 @@
       "Bash(docker ps:*)",
       "Bash(mkdir -p /Users/sae/Desktop/llm_again/.docker_data/postgres /Users/sae/Desktop/llm_again/.docker_data/redis && POSTGRES_DATA_DIR=/Users/sae/Desktop/llm_again/.docker_data/postgres REDIS_DATA_DIR=/Users/sae/Desktop/llm_again/.docker_data/redis docker compose -f /Users/sae/Desktop/llm_again/docker-compose.yml up -d postgres 2>&1)",
       "Bash(python3:*)",
-      "Bash(tail:*)"
+      "Bash(tail:*)",
+      "Bash(git:*)",
+      "Bash(do:*)",
+      "Bash(grep:*)",
+      "Bash(/tmp/docker_analysis.txt:*)",
+      "Read(//tmp/**)",
+      "Bash(git commit:*)",
+      "Bash(find /Users/sae/Desktop/llm_again -maxdepth 2 -type f \\\\\\( -name \"*.yml\" -o -name \"*.yaml\" \\\\\\) ! -path \"*/node_modules/*\" ! -path \"*/.git/*\" 2>/dev/null | xargs grep -l \"app\\\\|celery-beat\\\\|celery-worker\\\\|requirements/\\\\|init\\\\.sql\\\\|scripts/\" 2>/dev/null)"
     ]
   }
 }

@@ -279,14 +279,14 @@ erDiagram
         SERIAL dept_id PK
         INTEGER parent_dept_id FK
         VARCHAR name UK
-        TIMESTAMPTZ created_at
+        TIMESTAMP created_at
     }
 
     roles {
         SERIAL role_id PK
         VARCHAR role_name UK
         INTEGER auth_level
-        TIMESTAMPTZ created_at
+        TIMESTAMP created_at
     }
 
     users {
@@ -296,9 +296,9 @@ erDiagram
         VARCHAR email UK
         INTEGER dept_id FK
         INTEGER role_id FK
-        TIMESTAMPTZ last_login
+        TIMESTAMP last_login
         INTEGER failure
-        TIMESTAMPTZ locked_until
+        TIMESTAMP locked_until
         BOOLEAN is_active
     }
 
@@ -306,13 +306,13 @@ erDiagram
         SERIAL id PK
         INTEGER user_id FK
         TEXT token_hash
-        TIMESTAMPTZ expires_at
+        TIMESTAMP expires_at
         BOOLEAN revoked
     }
 
     user_preference {
-        INTEGER user_id PK_FK
-        JSONB preferences
+        INTEGER user_id PK
+        JSON preferences
     }
 
     %% ===== Document Domain =====
@@ -329,7 +329,7 @@ erDiagram
         INTEGER user_id FK
         INTEGER folder_id FK
         BOOLEAN is_recursive
-        TIMESTAMPTZ expires_at
+        TIMESTAMP expires_at
         BOOLEAN is_active
     }
 
@@ -341,7 +341,7 @@ erDiagram
         INTEGER dept_id FK
         INTEGER role_id FK
         VARCHAR status
-        TIMESTAMPTZ created_at
+        TIMESTAMP created_at
     }
 
     doc_image {
@@ -356,8 +356,8 @@ erDiagram
         INTEGER doc_id FK
         INTEGER chunk_idx
         TEXT content
-        VECTOR_1024 embedding
-        TSVECTOR tsv
+        VECTOR embedding
+        TSVECTOR_ tsv
         INTEGER image_id FK
     }
 
@@ -448,7 +448,7 @@ erDiagram
         INTEGER doc_id FK
         VARCHAR stage
         VARCHAR status
-        JSONB metadata
+        JSON metadata
     }
 
     sync_logs {
@@ -488,7 +488,7 @@ erDiagram
         INTEGER session_id FK
         INTEGER doc_id FK
         TEXT message
-        JSONB details
+        JSON details
         INTEGER duration_ms
         VARCHAR ip_address
     }
@@ -508,7 +508,7 @@ erDiagram
         VARCHAR job_name
         VARCHAR job_type
         VARCHAR status
-        JSONB config_json
+        JSON config_json
     }
 
     system_health {
@@ -576,7 +576,7 @@ erDiagram
 | Document | 6 | `document`, `doc_chunk` (pgvector 1024-dim + tsvector), `doc_image`, `graph_entities` |
 | Chat | 4 | `chat_session`, `chat_msg`, `msg_ref` (문서/웹 참조), `session_participant` |
 | Workspace | 4 | `workspace`, `ws_permission`, `ws_invitation`, `access_request` |
-| Logging | 6 | `audit_log`, `pipeline_logs`, `sync_logs`, `query_logs`, `web_search_log`, `event_log` (범용 JSONB) |
+| Logging | 6 | `audit_log`, `pipeline_logs`, `sync_logs`, `query_logs`, `web_search_log`, `event_log` (범용 JSON) |
 | System | 3 | `llm_config`, `system_job`, `system_health` |
 | **Views** | 2 | `user_activity_summary`, `document_stats` |
 
