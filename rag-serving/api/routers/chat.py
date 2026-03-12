@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -13,6 +14,7 @@ from rag_serving.api.rag.retriever import hybrid_search
 from rag_serving.api.rag.reranker import rerank
 from rag_serving.api.rag.graph_retriever import get_graph_context
 from rag_serving.api.rag.generator import build_messages, stream_response
+from rag_serving.api.rag.web_search import search_web
 from rag_serving.config import serving_settings
 from shared.models.orm import (
     AuditLog, ChatMessage, ChatSession, LLMConfig, MsgRef,
@@ -177,6 +179,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
         context_chunks = []
         reranked_chunks = []
         graph_ctx = ""
+        web_results = []
         assistant_msg_id = None
         token_count_out = 0
         start_time = time.time()
@@ -211,13 +214,27 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
             graph_ctx = get_graph_context(req.message)
             graph_ms = int((time.perf_counter() - graph_start) * 1000)
 
-            # Build messages with graph context
+            # Web search (optional)
+            web_ms = 0
+            if req.use_web_search and serving_settings.web_search_enabled:
+                web_start = time.perf_counter()
+                web_results = asyncio.run(
+                    search_web(
+                        query=req.message,
+                        user_id=user.user_id,
+                        session_id=session_id,
+                    )
+                )
+                web_ms = int((time.perf_counter() - web_start) * 1000)
+
+            # Build messages with graph context and optional web results
             llm_messages = build_messages(
                 system_prompt=llm_config.system_prompt or "",
                 context_chunks=reranked_chunks,
                 graph_context=graph_ctx,
                 chat_history=history,
                 user_message=req.message,
+                web_results=web_results if web_results else None,
             )
 
             # Estimate input tokens (rough: 1 token ~ 4 chars for mixed ko/en)
@@ -322,6 +339,8 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                           "retrieved_count": len(context_chunks),
                           "reranked_count": len(reranked_chunks),
                           "has_graph_context": bool(graph_ctx),
+                          "web_search_used": bool(web_results),
+                          "web_results_count": len(web_results),
                           "model": llm_config.model_name,
                           "token_in": token_count_in,
                           "token_out": token_count_out,
@@ -330,6 +349,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                               "search_ms": search_ms,
                               "rerank_ms": rerank_ms,
                               "graph_ms": graph_ms,
+                              "web_ms": web_ms,
                               "total_ms": latency_ms,
                           },
                       })

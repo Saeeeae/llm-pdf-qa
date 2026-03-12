@@ -8,7 +8,8 @@ logger = logging.getLogger(__name__)
 
 
 def build_messages(system_prompt: str, context_chunks: list[dict], graph_context: str,
-                   chat_history: list[dict], user_message: str) -> list[dict]:
+                   chat_history: list[dict], user_message: str,
+                   web_results: list[dict] | None = None) -> list[dict]:
     parts = [system_prompt]
     if graph_context:
         parts.append(graph_context)
@@ -19,6 +20,15 @@ def build_messages(system_prompt: str, context_chunks: list[dict], graph_context
             chunk_parts.append(f"[문서 {i}: {chunk['file_name']}{page}]\n{chunk['content'][:500]}")
         parts.append("=== 관련 문서 ===\n" + "\n\n".join(chunk_parts) + "\n=== 문서 끝 ===")
         parts.append("위 문서를 참고하여 답변하세요. 문서에 없는 내용은 모른다고 알려주세요.")
+    if web_results:
+        web_parts = []
+        for i, result in enumerate(web_results, 1):
+            title = result.get("title", "")
+            url = result.get("url", "")
+            snippet = result.get("snippet", "")
+            web_parts.append(f"[웹 {i}: {title}]\nURL: {url}\n{snippet}")
+        parts.append("=== 웹 검색 결과 ===\n" + "\n\n".join(web_parts) + "\n=== 웹 검색 끝 ===")
+        parts.append("위 웹 검색 결과도 참고하여 답변하세요.")
     messages = [{"role": "system", "content": "\n\n".join(parts)}]
     for msg in chat_history[-20:]:
         messages.append(msg)
