@@ -1,0 +1,35 @@
+services:
+  pipeline-api:
+    build:
+      context: .
+      dockerfile: rag-pipeline/Dockerfile.local
+    platform: linux/arm64
+    deploy: !reset {}
+
+  pipeline-worker:
+    build:
+      context: .
+      dockerfile: rag-pipeline/Dockerfile.local
+    platform: linux/arm64
+    deploy: !reset {}
+
+  serving-api:
+    build:
+      context: .
+      dockerfile: rag-serving/Dockerfile.api.local
+    platform: linux/arm64
+    deploy: !reset {}
+
+  sync-scheduler:
+    build:
+      context: .
+      dockerfile: rag-sync-monitor/Dockerfile.scheduler.local
+    platform: linux/arm64
+    deploy: !reset {}
+
+  sync-dashboard:
+    platform: linux/arm64
+    deploy: !reset {}
+
+  frontend:
+    platform: linux/arm64

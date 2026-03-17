@@ -11,14 +11,16 @@ def _build_access_conditions(search_scope: str, dept_id: int,
     if search_scope == "dept":
         params["dept_id"] = dept_id
         return "d.dept_id = :dept_id"
-    elif search_scope == "folder" and accessible_folder_ids:
-        params["folder_ids"] = tuple(accessible_folder_ids)
-        return "d.folder_id IN :folder_ids"
+    elif search_scope == "folder":
+        if not accessible_folder_ids:
+            return "FALSE"
+        params["folder_ids"] = list(accessible_folder_ids)
+        return "d.folder_id = ANY(:folder_ids)"
     else:
         params["dept_id"] = dept_id
         if accessible_folder_ids:
-            params["folder_ids"] = tuple(accessible_folder_ids)
-            return "(d.dept_id = :dept_id OR d.folder_id IN :folder_ids)"
+            params["folder_ids"] = list(accessible_folder_ids)
+            return "(d.dept_id = :dept_id OR d.folder_id = ANY(:folder_ids))"
         else:
             return "d.dept_id = :dept_id"
 

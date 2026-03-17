@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY rag-sync-monitor/requirements.scheduler.txt .
+RUN python -m pip install --upgrade pip && \
+    python -m pip install --no-cache-dir -r requirements.scheduler.txt
+
+COPY shared /app/shared
+COPY rag-sync-monitor /app/rag_sync_monitor
+
+ENV PYTHONPATH=/app
+CMD ["python", "-m", "rag_sync_monitor.scheduler.cron_sync"]

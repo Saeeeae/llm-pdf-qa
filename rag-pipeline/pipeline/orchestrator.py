@@ -17,13 +17,42 @@ elog = get_event_logger("pipeline")
 
 def log_stage(doc_id: int, stage: str, status: str, error: str = None, metadata: dict = None):
     with get_session() as session:
-        log = PipelineLog(
-            doc_id=doc_id, stage=stage, status=status,
-            error_message=error, metadata_=metadata,
+        if status == "running":
+            session.add(PipelineLog(
+                doc_id=doc_id,
+                stage=stage,
+                status=status,
+                error_message=error,
+                metadata_=metadata,
+            ))
+            return
+
+        log = (
+            session.query(PipelineLog)
+            .filter(
+                PipelineLog.doc_id == doc_id,
+                PipelineLog.stage == stage,
+                PipelineLog.status == "running",
+                PipelineLog.finished_at.is_(None),
+            )
+            .order_by(PipelineLog.started_at.desc())
+            .first()
         )
-        if status in ("success", "failed"):
+
+        if log:
+            log.status = status
+            log.error_message = error
+            log.metadata_ = metadata
             log.finished_at = datetime.now(timezone.utc)
-        session.add(log)
+        else:
+            session.add(PipelineLog(
+                doc_id=doc_id,
+                stage=stage,
+                status=status,
+                error_message=error,
+                metadata_=metadata,
+                finished_at=datetime.now(timezone.utc),
+            ))
 
 
 def process_document(doc_id: int):
@@ -32,13 +61,16 @@ def process_document(doc_id: int):
         if not doc:
             raise ValueError(f"Document {doc_id} not found")
         doc.status = "processing"
+        doc.error_msg = None
         file_path = doc.path
         file_name = doc.file_name
 
     elog.info("Pipeline started", doc_id=doc_id, details={"file": file_name, "path": file_path})
+    current_stage = "mineru_parse"
 
     try:
         # Stage 1: MinerU Parse
+        current_stage = "mineru_parse"
         with elog.timed("mineru_parse", doc_id=doc_id):
             log_stage(doc_id, "mineru_parse", "running")
             parse_result = parse_document(file_path)
@@ -47,6 +79,7 @@ def process_document(doc_id: int):
                   details={"pages": parse_result.total_pages, "images": len(getattr(parse_result, 'images', []))})
 
         # Stage 2: Chunking
+        current_stage = "chunk"
         with elog.timed("chunk", doc_id=doc_id):
             log_stage(doc_id, "chunk", "running")
             chunks = chunk_text(parse_result.raw_text)
@@ -58,25 +91,31 @@ def process_document(doc_id: int):
                 d = session.query(Document).filter(Document.doc_id == doc_id).first()
                 d.status = "indexed"
                 d.total_page_cnt = parse_result.total_pages
+                d.error_msg = None
             elog.info("Pipeline complete (no chunks)", doc_id=doc_id)
             return
 
         # Stage 3: Embedding
+        current_stage = "embed"
         with elog.timed("embed", doc_id=doc_id):
             log_stage(doc_id, "embed", "running")
             texts = [c["text"] for c in chunks]
             embeddings = embed_chunks(texts)
             log_stage(doc_id, "embed", "success")
+        embedding_count = len(embeddings) if embeddings is not None else 0
+        embedding_dim = len(embeddings[0]) if embedding_count > 0 else 0
         elog.info("Embedded chunks", doc_id=doc_id,
-                  details={"chunk_count": len(chunks), "dim": len(embeddings[0]) if embeddings else 0})
+                  details={"chunk_count": len(chunks), "embedding_count": embedding_count, "dim": embedding_dim})
 
         # Stage 4: Indexing
+        current_stage = "index"
         with elog.timed("index", doc_id=doc_id):
             log_stage(doc_id, "index", "running")
             index_chunks(doc_id, chunks, embeddings)
             log_stage(doc_id, "index", "success")
 
         # Stage 5: Graph Extraction
+        current_stage = "graph_extract"
         with elog.timed("graph_extract", doc_id=doc_id):
             log_stage(doc_id, "graph_extract", "running")
             all_text = " ".join(texts)
@@ -89,6 +128,7 @@ def process_document(doc_id: int):
             d = session.query(Document).filter(Document.doc_id == doc_id).first()
             d.status = "indexed"
             d.total_page_cnt = parse_result.total_pages
+            d.error_msg = None
 
         elog.info("Pipeline complete", doc_id=doc_id, details={
             "file": file_name,
@@ -98,7 +138,13 @@ def process_document(doc_id: int):
         })
 
     except Exception as e:
-        # Log failed stage to pipeline_logs
+        log_stage(
+            doc_id,
+            current_stage,
+            "failed",
+            error=str(e)[:1000],
+            metadata={"file": file_name},
+        )
         with get_session() as session:
             d = session.query(Document).filter(Document.doc_id == doc_id).first()
             if d:

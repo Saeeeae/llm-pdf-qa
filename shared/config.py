@@ -57,6 +57,9 @@ class SharedSettings(BaseSettings):
     # HuggingFace
     hf_token: Optional[str] = None
 
+    # Development / smoke validation
+    smoke_test_mode: bool = False
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

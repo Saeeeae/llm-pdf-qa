@@ -57,6 +57,14 @@ _CAMEL_RE = re.compile(r"\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b")
 _PRODUCT_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9\-]{2,}\s*[vV]?\d+(?:\.\d+)*\b")
 
 
+def get_neo4j_driver():
+    """Create a Neo4j driver using shared settings."""
+    return GraphDatabase.driver(
+        shared_settings.neo4j_url,
+        auth=(shared_settings.neo4j_user, shared_settings.neo4j_password),
+    )
+
+
 def _deduplicate(entities: list[dict]) -> list[dict]:
     """Remove exact duplicates (same name+type), keeping first occurrence."""
     seen: set[tuple[str, str]] = set()

@@ -57,7 +57,7 @@ graph TB
 
 | 레이어 | 기술 | 비고 |
 |--------|------|------|
-| Frontend | Next.js 14 (App Router, TypeScript, Tailwind) | 채팅 UI, 로그인, 관리자 |
+| Frontend | Next.js 16 (App Router, TypeScript, Tailwind) | 채팅 UI, 로그인, 관리자 |
 | Backend | FastAPI (Python 3.11, sync SQLAlchemy) | rag-serving + rag-pipeline |
 | LLM | vLLM + Qwen2.5-72B-Instruct-AWQ | OpenAI-compatible API |
 | Embedding | BAAI/bge-m3 (1024-dim) | Dense + Sparse 지원 |
@@ -180,8 +180,10 @@ DOC_WATCH_DIR=/path/to/your/documents
 
 ### 2. 서비스 실행
 
+기본 운영 경로는 Docker Compose입니다. 이 프로젝트는 전체 스택을 컨테이너 기준으로 맞춰두었고, 로컬 실행은 개발 편의를 위한 보조 경로입니다.
+
 ```bash
-# 전체 서비스 (GPU 없이)
+# 전체 서비스
 make up
 
 # GPU 포함 (vLLM)
@@ -197,21 +199,30 @@ make ps
 ### 3. 첫 관리자 계정 생성
 
 ```bash
-docker compose exec serving-api python3 -c "
+docker compose exec -T serving-api python3 - <<'PY'
 from rag_serving.api.auth.password import hash_password
 from shared.models.orm import User
 from shared.db import get_session
+
+email = "admin@company.com"
+password = "change_me_admin_password"
+
 with get_session() as s:
-    u = User(
-        pwd=hash_password('your_password'),
-        usr_name='관리자',
-        email='admin@company.com',
-        dept_id=1,
-        role_id=1
-    )
-    s.add(u)
-print('관리자 계정 생성 완료')
-"
+    user = s.query(User).filter(User.email == email).first()
+    if not user:
+        s.add(User(
+            pwd=hash_password(password),
+            usr_name="관리자",
+            email=email,
+            dept_id=1,
+            role_id=1,
+        ))
+        print("관리자 계정 생성 완료:", email)
+    else:
+        user.pwd = hash_password(password)
+        user.is_active = True
+        print("기존 관리자 계정 비밀번호 갱신 완료:", email)
+PY
 ```
 
 ### 4. 접속
@@ -219,10 +230,150 @@ print('관리자 계정 생성 완료')
 | URL | 서비스 |
 |-----|--------|
 | http://localhost:3000 | 채팅 UI (로그인 후 사용) |
+| http://localhost:3000/admin | Next.js 관리자 운영 콘솔 |
 | http://localhost:8002/docs | Serving API Swagger |
 | http://localhost:8001/docs | Pipeline API Swagger |
 | http://localhost:8003 | Sync/Monitor 대시보드 |
 | http://localhost:7474 | Neo4j Browser |
+
+---
+
+## Phase 0 확인 절차
+
+### 1. Docker 기반 실행 확인
+
+```bash
+make up
+make ps
+```
+
+GPU 서버에서 vLLM까지 함께 올릴 경우:
+
+```bash
+make up-gpu
+make ps
+```
+
+개발용 smoke 검증만 먼저 하고 싶다면 `.env`에서 아래 값을 사용할 수 있습니다.
+
+```ini
+EMBEDDING_DEVICE=cpu
+RERANKER_DEVICE=cpu
+SMOKE_TEST_MODE=true
+VLLM_BASE_URL=mock://local
+```
+
+이 모드에서는 임베딩/리랭커/생성 단계가 개발용 fallback으로 동작하므로, GPU와 실제 모델 없이도 Phase 0의 관리자/검색/채팅 경로를 검증할 수 있습니다.
+
+맥북 M2 같은 로컬 개발 환경에서는 아래처럼 로컬 override를 함께 사용하는 편이 안정적입니다.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+```
+
+운영 배포 기준은 Ubuntu 24.04 + Intel Xeon + NVIDIA L40S이며, 이 경우에는 기본 `docker-compose.yml` 경로를 사용합니다.
+
+### 2. 샘플 문서 sync / pipeline 확인
+
+샘플 문서가 `DOC_WATCH_DIR`에 있다면 `sync-scheduler`가 시작 시 1회 자동 동기화를 수행합니다.
+
+```bash
+docker compose exec -T postgres psql -U admin -d rag_system -c "
+select doc_id, file_name, status, error_msg, total_page_cnt
+from document
+order by doc_id;
+"
+
+docker compose exec -T postgres psql -U admin -d rag_system -c "
+select id, doc_id, stage, status, started_at, finished_at
+from pipeline_logs
+order by id desc
+limit 20;
+"
+```
+
+재처리가 필요하면:
+
+```bash
+docker compose exec -T pipeline-api curl -sS \
+  -X POST http://localhost:8001/pipeline/trigger \
+  -H 'Content-Type: application/json' \
+  -d '{"doc_ids":[1]}'
+```
+
+### 3. 관리자 계정 생성
+
+위의 "첫 관리자 계정 생성" 절차를 실행한 뒤 로그인합니다.
+
+### 4. 관리자 콘솔 확인
+
+1. `http://localhost:3000`에서 관리자 계정으로 로그인합니다.
+2. `http://localhost:3000/admin`으로 이동합니다.
+3. 아래 항목이 정상 동작하는지 확인합니다.
+
+- 운영 개요 카드가 로드되고 마지막 갱신 시간이 표시된다.
+- 문서 탭에서 상태 필터와 검색이 동작한다.
+- 문서 행 클릭 시 우측 드로어에서 문서 상세와 최근 파이프라인 이력이 열린다.
+- 파이프라인 탭에서 상태/스테이지 필터가 동작한다.
+- 파이프라인 행 클릭 시 우측 상세 패널에서 오류 메시지와 metadata를 확인할 수 있다.
+- 운영 개요의 실패/실행중/모듈 카드 클릭 시 문서 또는 파이프라인 탭으로 drill-down 된다.
+
+### 5. API / 채팅 smoke 확인
+
+호스트에서 직접 호출해도 되고, 로컬 환경 제약이 있으면 컨테이너 내부에서 호출해도 됩니다.
+
+```bash
+docker compose exec -T serving-api python3 - <<'PY'
+import json
+import httpx
+
+base = "http://localhost:8002"
+creds = {"email": "admin@company.com", "password": "change_me_admin_password"}
+
+with httpx.Client(timeout=60.0) as client:
+    login = client.post(f"{base}/api/v1/auth/login", json=creds)
+    login.raise_for_status()
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    print("system-summary:", client.get(f"{base}/api/v1/admin/system-summary", headers=headers).json())
+
+    session = client.post(
+        f"{base}/api/v1/chat/sessions",
+        headers=headers,
+        json={"title": "phase0 smoke"},
+    ).json()
+
+    with client.stream(
+        "POST",
+        f"{base}/api/v1/chat/sessions/{session['session_id']}/stream",
+        headers=headers,
+        json={
+            "message": "Project Atlas와 EGFR, NSCLC를 요약해줘",
+            "search_scope": "all",
+            "use_web_search": False,
+        },
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if line and line.startswith("data: "):
+                print(line)
+PY
+```
+
+### 6. 정적 검증
+
+```bash
+python3 -m py_compile rag-serving/api/routers/admin.py
+python3 -m pytest tests/test_import_aliases.py -q
+frontend/node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
+```
+
+참고:
+
+- 프론트 ESLint는 현재 레포에 `eslint.config.js`가 없어 직접 실행 시 실패할 수 있습니다.
+- Streamlit 운영 대시보드는 `http://localhost:8003`, Next.js 관리자 콘솔은 `http://localhost:3000/admin`입니다.
 
 ---
 

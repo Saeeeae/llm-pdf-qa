@@ -1,4 +1,6 @@
 import logging
+import os
+import time
 
 import httpx
 
@@ -7,7 +9,7 @@ from shared.models.orm import Document
 
 logger = logging.getLogger(__name__)
 
-PIPELINE_API_URL = "http://rag-pipeline:8001"
+PIPELINE_API_URL = os.getenv("PIPELINE_API_URL", "http://pipeline-api:8001")
 
 
 def trigger_pending_documents(pipeline_url: str = PIPELINE_API_URL) -> None:
@@ -24,12 +26,7 @@ def trigger_pending_documents(pipeline_url: str = PIPELINE_API_URL) -> None:
         logger.info("No pending documents to process")
         return
 
-    response = httpx.post(
-        f"{pipeline_url}/pipeline/trigger",
-        json={"doc_ids": doc_ids},
-        timeout=30.0,
-    )
-    response.raise_for_status()
+    _post_with_retry(pipeline_url, doc_ids)
     logger.info("Triggered pipeline for %d documents", len(doc_ids))
 
 
@@ -41,10 +38,30 @@ def trigger_specific_documents(
     if not doc_ids:
         return
 
-    response = httpx.post(
-        f"{pipeline_url}/pipeline/trigger",
-        json={"doc_ids": doc_ids},
-        timeout=30.0,
-    )
-    response.raise_for_status()
+    _post_with_retry(pipeline_url, doc_ids)
     logger.info("Triggered pipeline for %d documents", len(doc_ids))
+
+
+def _post_with_retry(pipeline_url: str, doc_ids: list[int], max_attempts: int = 5) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = httpx.post(
+                f"{pipeline_url}/pipeline/trigger",
+                json={"doc_ids": doc_ids},
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Pipeline trigger attempt %d/%d failed: %s",
+                attempt,
+                max_attempts,
+                exc,
+            )
+            if attempt < max_attempts:
+                time.sleep(min(2 * attempt, 8))
+
+    raise RuntimeError(f"Failed to trigger pipeline after {max_attempts} attempts") from last_error

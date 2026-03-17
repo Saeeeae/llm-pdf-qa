@@ -129,7 +129,7 @@ services:
     command: python -m rag_sync_monitor.scheduler.cron_sync
     env_file: .env
     volumes:
-      - ${DOC_WATCH_DIR:-/data/documents}:/mnt/nas/documents:ro
+      - ${DOC_WATCH_DIR:-/data/documents}:/data/documents:ro
     depends_on:
       postgres:
         condition: service_healthy

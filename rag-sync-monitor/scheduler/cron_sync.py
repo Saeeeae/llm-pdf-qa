@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def run_file_sync() -> None:
     """Execute a single file-sync + pipeline-trigger cycle."""
-    scan_path = os.getenv("SOURCE_SCAN_PATHS", "/mnt/nas/documents")
+    scan_path = os.getenv("SOURCE_SCAN_PATHS") or os.getenv("DOC_WATCH_DIR", "/mnt/nas/documents")
     dept_id = int(os.getenv("DEFAULT_DEPT_ID", "1"))
     role_id = int(os.getenv("DEFAULT_ROLE_ID", "3"))
 
@@ -19,7 +19,7 @@ def run_file_sync() -> None:
     result = sync_directory(scan_path, dept_id=dept_id, role_id=role_id)
 
     if result.new_doc_ids:
-        pipeline_url = os.getenv("PIPELINE_API_URL", "http://rag-pipeline:8001")
+        pipeline_url = os.getenv("PIPELINE_API_URL", "http://pipeline-api:8001")
         trigger_pending_documents(pipeline_url)
 
 

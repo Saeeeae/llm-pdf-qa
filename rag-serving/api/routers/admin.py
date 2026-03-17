@@ -3,13 +3,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 
 from rag_serving.api.auth.dependencies import get_current_user, require_admin
 from rag_serving.api.auth.password import hash_password
 from shared.models.orm import (
-    AuditLog, Department, Document, EventLog, LLMConfig, PipelineLog,
-    QueryLog, Role, SyncLog, User,
+    AuditLog, Department, DocChunk, DocFolder, DocImage, Document, EventLog,
+    GraphEntity, LLMConfig, PipelineLog, QueryLog, Role, SyncLog, User,
 )
 from shared.db import get_session
 from shared.event_logger import get_event_logger
@@ -135,6 +135,119 @@ class DocStats(BaseModel):
     pending: int
 
 
+class AdminDocumentListItem(BaseModel):
+    doc_id: int
+    file_name: str
+    path: str
+    type: str
+    status: str
+    language: str | None
+    total_page_cnt: int
+    size: int | None
+    folder_name: str | None
+    dept_name: str | None
+    role_name: str | None
+    chunk_count: int
+    image_count: int
+    entity_count: int
+    error_msg: str | None
+    created_at: str
+    updated_at: str
+
+
+class PipelineLogItem(BaseModel):
+    id: int
+    doc_id: int | None
+    doc_file_name: str | None = None
+    stage: str
+    status: str
+    started_at: str | None
+    finished_at: str | None
+    error_message: str | None
+    metadata: dict | None = None
+
+
+class AdminDocumentDetailResponse(AdminDocumentListItem):
+    recent_pipeline_logs: list[PipelineLogItem]
+
+
+def _document_base_query(session):
+    chunk_counts = (
+        session.query(
+            DocChunk.doc_id.label("doc_id"),
+            func.count(DocChunk.chunk_id).label("chunk_count"),
+        )
+        .group_by(DocChunk.doc_id)
+        .subquery()
+    )
+    image_counts = (
+        session.query(
+            DocImage.doc_id.label("doc_id"),
+            func.count(DocImage.image_id).label("image_count"),
+        )
+        .group_by(DocImage.doc_id)
+        .subquery()
+    )
+    entity_counts = (
+        session.query(
+            GraphEntity.doc_id.label("doc_id"),
+            func.count(GraphEntity.id).label("entity_count"),
+        )
+        .group_by(GraphEntity.doc_id)
+        .subquery()
+    )
+
+    return (
+        session.query(
+            Document.doc_id.label("doc_id"),
+            Document.file_name.label("file_name"),
+            Document.path.label("path"),
+            Document.type.label("type"),
+            Document.status.label("status"),
+            Document.language.label("language"),
+            Document.total_page_cnt.label("total_page_cnt"),
+            Document.size.label("size"),
+            DocFolder.folder_name.label("folder_name"),
+            Department.name.label("dept_name"),
+            Role.role_name.label("role_name"),
+            func.coalesce(chunk_counts.c.chunk_count, 0).label("chunk_count"),
+            func.coalesce(image_counts.c.image_count, 0).label("image_count"),
+            func.coalesce(entity_counts.c.entity_count, 0).label("entity_count"),
+            Document.error_msg.label("error_msg"),
+            Document.created_at.label("created_at"),
+            Document.updated_at.label("updated_at"),
+        )
+        .outerjoin(Department, Department.dept_id == Document.dept_id)
+        .outerjoin(Role, Role.role_id == Document.role_id)
+        .outerjoin(DocFolder, DocFolder.folder_id == Document.folder_id)
+        .outerjoin(chunk_counts, chunk_counts.c.doc_id == Document.doc_id)
+        .outerjoin(image_counts, image_counts.c.doc_id == Document.doc_id)
+        .outerjoin(entity_counts, entity_counts.c.doc_id == Document.doc_id)
+    )
+
+
+def _serialize_document_row(row) -> AdminDocumentListItem:
+    return AdminDocumentListItem(
+        doc_id=row.doc_id,
+        file_name=row.file_name,
+        path=row.path,
+        type=row.type,
+        status=row.status,
+        language=row.language,
+        total_page_cnt=row.total_page_cnt or 0,
+        size=row.size,
+        folder_name=row.folder_name,
+        dept_name=row.dept_name,
+        role_name=row.role_name,
+        chunk_count=row.chunk_count or 0,
+        image_count=row.image_count or 0,
+        entity_count=row.entity_count or 0,
+        error_msg=row.error_msg,
+        created_at=row.created_at.isoformat() if row.created_at else "",
+        updated_at=row.updated_at.isoformat() if row.updated_at else "",
+    )
+
+
 @router.get("/documents/stats", response_model=DocStats)
 def doc_stats(admin: User = Depends(require_admin)):
     with get_session() as session:
@@ -144,6 +257,193 @@ def doc_stats(admin: User = Depends(require_admin)):
             failed=session.query(Document).filter(Document.status == "failed").count(),
             pending=session.query(Document).filter(Document.status == "pending").count(),
         )
+
+
+@router.get("/documents", response_model=list[AdminDocumentListItem])
+def list_documents(
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    q: str | None = Query(None, description="file name or path search"),
+    admin: User = Depends(require_admin),
+):
+    with get_session() as session:
+        query = _document_base_query(session).order_by(Document.updated_at.desc())
+        if status:
+            query = query.filter(Document.status == status)
+        if q:
+            like = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    Document.file_name.ilike(like),
+                    Document.path.ilike(like),
+                    Document.type.ilike(like),
+                )
+            )
+
+        rows = query.offset(offset).limit(limit).all()
+        return [_serialize_document_row(row) for row in rows]
+
+
+@router.get("/documents/{doc_id}", response_model=AdminDocumentDetailResponse)
+def get_document_detail(doc_id: int, admin: User = Depends(require_admin)):
+    with get_session() as session:
+        row = _document_base_query(session).filter(Document.doc_id == doc_id).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        logs = (
+            session.query(PipelineLog, Document.file_name)
+            .outerjoin(Document, Document.doc_id == PipelineLog.doc_id)
+            .filter(PipelineLog.doc_id == doc_id)
+            .order_by(PipelineLog.started_at.desc())
+            .limit(10)
+            .all()
+        )
+
+    item = _serialize_document_row(row)
+    return AdminDocumentDetailResponse(
+        **item.model_dump(),
+        recent_pipeline_logs=[
+            PipelineLogItem(
+                id=log.id,
+                doc_id=log.doc_id,
+                doc_file_name=file_name,
+                stage=log.stage,
+                status=log.status,
+                started_at=log.started_at.isoformat() if log.started_at else None,
+                finished_at=log.finished_at.isoformat() if log.finished_at else None,
+                error_message=log.error_message,
+                metadata=log.metadata_,
+            )
+            for log, file_name in logs
+        ],
+    )
+
+
+class RecentPipelineFailureItem(BaseModel):
+    id: int
+    doc_id: int | None
+    doc_file_name: str | None = None
+    stage: str
+    error_message: str | None
+    started_at: str | None
+
+
+class RecentSyncRunItem(BaseModel):
+    id: int
+    sync_type: str | None
+    status: str | None
+    started_at: str | None
+    finished_at: str | None
+    files_added: int
+    files_modified: int
+    files_deleted: int
+
+
+class SystemSummaryResponse(BaseModel):
+    documents: DocStats
+    active_users_7d: int
+    queries_7d: int
+    recent_pipeline_failures: list[RecentPipelineFailureItem]
+    recent_sync_runs: list[RecentSyncRunItem]
+    pipeline_running_count: int
+    event_errors_24h: int
+
+
+@router.get("/system-summary", response_model=SystemSummaryResponse)
+def system_summary(admin: User = Depends(require_admin)):
+    with get_session() as session:
+        latest_pipeline_log_ids = (
+            session.query(func.max(PipelineLog.id).label("id"))
+            .group_by(PipelineLog.doc_id, PipelineLog.stage)
+            .subquery()
+        )
+
+        documents = DocStats(
+            total=session.query(Document).count(),
+            indexed=session.query(Document).filter(Document.status == "indexed").count(),
+            failed=session.query(Document).filter(Document.status == "failed").count(),
+            pending=session.query(Document).filter(Document.status == "pending").count(),
+        )
+        active_users_7d = (
+            session.query(func.count(func.distinct(QueryLog.user_id)))
+            .filter(QueryLog.created_at >= func.now() - text("INTERVAL '7 days'"))
+            .scalar()
+            or 0
+        )
+        queries_7d = (
+            session.query(func.count(QueryLog.id))
+            .filter(QueryLog.created_at >= func.now() - text("INTERVAL '7 days'"))
+            .scalar()
+            or 0
+        )
+        pipeline_running_count = (
+            session.query(func.count(PipelineLog.id))
+            .filter(
+                PipelineLog.id.in_(session.query(latest_pipeline_log_ids.c.id)),
+                PipelineLog.status == "running",
+                PipelineLog.finished_at.is_(None),
+            )
+            .scalar()
+            or 0
+        )
+        event_errors_24h = (
+            session.query(func.count(EventLog.id))
+            .filter(
+                EventLog.severity == "error",
+                EventLog.created_at >= func.now() - text("INTERVAL '24 hours'"),
+            )
+            .scalar()
+            or 0
+        )
+
+        recent_failures = (
+            session.query(PipelineLog, Document.file_name)
+            .outerjoin(Document, Document.doc_id == PipelineLog.doc_id)
+            .filter(PipelineLog.status == "failed")
+            .order_by(PipelineLog.started_at.desc())
+            .limit(5)
+            .all()
+        )
+        recent_syncs = (
+            session.query(SyncLog)
+            .order_by(SyncLog.started_at.desc())
+            .limit(5)
+            .all()
+        )
+
+    return SystemSummaryResponse(
+        documents=documents,
+        active_users_7d=active_users_7d,
+        queries_7d=queries_7d,
+        recent_pipeline_failures=[
+            RecentPipelineFailureItem(
+                id=log.id,
+                doc_id=log.doc_id,
+                doc_file_name=file_name,
+                stage=log.stage,
+                error_message=log.error_message,
+                started_at=log.started_at.isoformat() if log.started_at else None,
+            )
+            for log, file_name in recent_failures
+        ],
+        recent_sync_runs=[
+            RecentSyncRunItem(
+                id=item.id,
+                sync_type=item.sync_type,
+                status=item.status,
+                started_at=item.started_at.isoformat() if item.started_at else None,
+                finished_at=item.finished_at.isoformat() if item.finished_at else None,
+                files_added=item.files_added or 0,
+                files_modified=item.files_modified or 0,
+                files_deleted=item.files_deleted or 0,
+            )
+            for item in recent_syncs
+        ],
+        pipeline_running_count=pipeline_running_count,
+        event_errors_24h=event_errors_24h,
+    )
 
 
 # --- Audit Logs ---
@@ -277,18 +577,6 @@ def list_query_logs(
         ]
 
 
-# --- Pipeline Logs ---
-
-class PipelineLogItem(BaseModel):
-    id: int
-    doc_id: int | None
-    stage: str
-    status: str
-    started_at: str | None
-    finished_at: str | None
-    error_message: str | None
-
-
 @router.get("/pipeline-logs", response_model=list[PipelineLogItem])
 def list_pipeline_logs(
     limit: int = 50,
@@ -298,7 +586,11 @@ def list_pipeline_logs(
     admin: User = Depends(require_admin),
 ):
     with get_session() as session:
-        q = session.query(PipelineLog).order_by(PipelineLog.started_at.desc())
+        q = (
+            session.query(PipelineLog, Document.file_name)
+            .outerjoin(Document, Document.doc_id == PipelineLog.doc_id)
+            .order_by(PipelineLog.started_at.desc())
+        )
         if status:
             q = q.filter(PipelineLog.status == status)
         if stage:
@@ -306,12 +598,17 @@ def list_pipeline_logs(
         logs = q.offset(offset).limit(limit).all()
         return [
             PipelineLogItem(
-                id=l.id, doc_id=l.doc_id, stage=l.stage, status=l.status,
-                started_at=l.started_at.isoformat() if l.started_at else None,
-                finished_at=l.finished_at.isoformat() if l.finished_at else None,
-                error_message=l.error_message,
+                id=log.id,
+                doc_id=log.doc_id,
+                doc_file_name=file_name,
+                stage=log.stage,
+                status=log.status,
+                started_at=log.started_at.isoformat() if log.started_at else None,
+                finished_at=log.finished_at.isoformat() if log.finished_at else None,
+                error_message=log.error_message,
+                metadata=log.metadata_,
             )
-            for l in logs
+            for log, file_name in logs
         ]
 
 

@@ -3,6 +3,7 @@ import logging
 from typing import Generator
 
 import httpx
+from shared.config import shared_settings
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,24 @@ def build_messages(system_prompt: str, context_chunks: list[dict], graph_context
 def stream_response(messages: list[dict], vllm_url: str, model_name: str,
                     max_tokens: int = 4096, temperature: float = 0.7,
                     top_p: float = 0.9) -> Generator[str, None, None]:
+    if shared_settings.smoke_test_mode or vllm_url.startswith("mock://"):
+        user_message = next((msg["content"] for msg in reversed(messages) if msg.get("role") == "user"), "")
+        system_context = messages[0]["content"] if messages else ""
+        context_hint = ""
+        if "=== 관련 문서 ===" in system_context:
+            context_hint = system_context.split("=== 관련 문서 ===", 1)[1].split("=== 문서 끝 ===", 1)[0].strip()
+            context_hint = context_hint[:320]
+        response = (
+            "SMOKE TEST MODE 응답입니다. "
+            f"질문: {user_message}\n"
+            "검색된 문서를 기준으로 처리 경로와 DB 연동을 검증했습니다."
+        )
+        if context_hint:
+            response += f"\n근거 요약:\n{context_hint}"
+        for token in response:
+            yield token
+        return
+
     payload = {
         "model": model_name,
         "messages": messages,

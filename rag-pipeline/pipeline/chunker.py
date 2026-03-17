@@ -9,7 +9,6 @@ import re
 from functools import lru_cache
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from transformers import AutoTokenizer
 
 from rag_pipeline.config import pipeline_settings
 
@@ -23,11 +22,24 @@ TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
 @lru_cache(maxsize=1)
 def _get_tokenizer():
     from shared.config import shared_settings
-    return AutoTokenizer.from_pretrained(shared_settings.embedding_model_name)
+    if shared_settings.smoke_test_mode:
+        return None
+    try:
+        from transformers import AutoTokenizer
+        return AutoTokenizer.from_pretrained(shared_settings.embedding_model_name)
+    except Exception as exc:
+        logger.warning("Falling back to approximate token counting: %s", exc)
+        return None
 
 
 def token_length(text: str) -> int:
     tokenizer = _get_tokenizer()
+    if tokenizer is None:
+        stripped = text.strip()
+        if not stripped:
+            return 0
+        # Mixed ko/en approximation for smoke/dev mode.
+        return max(1, len(stripped) // 4)
     return len(tokenizer.encode(text, add_special_tokens=False))
 
 
