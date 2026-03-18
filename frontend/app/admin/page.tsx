@@ -16,7 +16,7 @@ import {
   Waves,
   X,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { API_BASE, api } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth";
 
 interface DocStats {
@@ -78,6 +78,22 @@ interface PipelineLogItem {
   metadata?: Record<string, unknown> | null;
 }
 
+interface DocumentBlockItem {
+  block_id: number;
+  block_idx: number;
+  block_type: string;
+  page_number: number | null;
+  sheet_name: string | null;
+  slide_number: number | null;
+  section_path: string | null;
+  language: string | null;
+  preview_text: string;
+  source_text: string;
+  image_id: number | null;
+  image_url: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
 interface ModuleStatItem {
   module: string;
   total_events: number;
@@ -98,6 +114,7 @@ interface DocumentItem {
   folder_name: string | null;
   dept_name: string | null;
   role_name: string | null;
+  block_count: number;
   chunk_count: number;
   image_count: number;
   entity_count: number;
@@ -108,6 +125,7 @@ interface DocumentItem {
 
 interface DocumentDetail extends DocumentItem {
   recent_pipeline_logs: PipelineLogItem[];
+  recent_blocks: DocumentBlockItem[];
 }
 
 type AdminTab = "overview" | "documents" | "users" | "pipeline";
@@ -180,6 +198,76 @@ function moduleTone(item: ModuleStatItem) {
   if (item.errors > 0) return "border-rose-200 bg-rose-50/80";
   if (item.warnings > 0) return "border-amber-200 bg-amber-50/80";
   return "border-emerald-200 bg-emerald-50/80";
+}
+
+function formatBlockLocation(block: DocumentBlockItem) {
+  const parts: string[] = [];
+  if (block.page_number) parts.push(`p.${block.page_number}`);
+  if (block.sheet_name) parts.push(`sheet ${block.sheet_name}`);
+  if (block.slide_number) parts.push(`slide ${block.slide_number}`);
+  if (block.section_path) parts.push(block.section_path);
+  return parts.length > 0 ? parts.join(" · ") : "위치 정보 없음";
+}
+
+function resolveApiUrl(url: string | null) {
+  if (!url) return null;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  return `${API_BASE}${url}`;
+}
+
+function AuthenticatedImage({
+  src,
+  alt,
+}: {
+  src: string;
+  alt: string;
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl: string | null = null;
+
+    const load = async () => {
+      try {
+        setFailed(false);
+        const response = await api.get(src, { responseType: "blob" });
+        objectUrl = URL.createObjectURL(response.data);
+        if (active) setBlobUrl(objectUrl);
+      } catch {
+        if (active) {
+          setFailed(true);
+          setBlobUrl(null);
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [src]);
+
+  if (failed) {
+    return (
+      <div className="flex h-40 items-center justify-center bg-slate-100 text-sm text-slate-400">
+        이미지 preview를 불러오지 못했습니다.
+      </div>
+    );
+  }
+
+  if (!blobUrl) {
+    return (
+      <div className="flex h-40 items-center justify-center bg-slate-100 text-sm text-slate-400">
+        이미지 preview를 불러오는 중입니다.
+      </div>
+    );
+  }
+
+  return <img src={blobUrl} alt={alt} className="max-h-72 w-full object-contain bg-slate-100" />;
 }
 
 function inferStageFromModule(module: string) {
@@ -664,6 +752,7 @@ export default function AdminPage() {
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                           <span>{item.type.toUpperCase()}</span>
                           <span>페이지 {item.total_page_cnt}</span>
+                          <span>블록 {item.block_count}</span>
                           <span>청크 {item.chunk_count}</span>
                           <span>{fmtDate(item.updated_at)}</span>
                         </div>
@@ -818,7 +907,7 @@ export default function AdminPage() {
                 <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Documents</p>
                 <h2 className="mt-2 text-xl font-semibold text-slate-950">문서 운영 뷰</h2>
                 <p className="mt-2 text-sm text-slate-500">
-                  문서 상태, 청크 수, 이미지 수, Graph 엔티티 수를 기준으로 처리 품질을 확인할 수 있습니다.
+                  문서 상태, block 수, 청크 수, 이미지 수, Graph 엔티티 수를 기준으로 처리 품질을 확인할 수 있습니다.
                 </p>
               </div>
 
@@ -867,7 +956,7 @@ export default function AdminPage() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-[0.18em] text-slate-500">
                   <tr>
-                    {["문서", "타입", "상태", "페이지", "청크/이미지/엔티티", "업데이트", "오류"].map((header) => (
+                    {["문서", "타입", "상태", "페이지", "블록/청크/이미지/엔티티", "업데이트", "오류"].map((header) => (
                       <th key={header} className="px-5 py-4">{header}</th>
                     ))}
                   </tr>
@@ -896,7 +985,7 @@ export default function AdminPage() {
                       </td>
                       <td className="px-5 py-4 text-slate-600">{item.total_page_cnt}</td>
                       <td className="px-5 py-4 text-slate-600">
-                        {item.chunk_count} / {item.image_count} / {item.entity_count}
+                        {item.block_count} / {item.chunk_count} / {item.image_count} / {item.entity_count}
                       </td>
                       <td className="px-5 py-4 text-slate-500">{fmtDate(item.updated_at)}</td>
                       <td className="max-w-sm px-5 py-4 text-slate-500">{item.error_msg || "-"}</td>
@@ -1142,7 +1231,10 @@ export default function AdminPage() {
 
               <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
                 <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Signals</p>
-                <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
+                  <div className="rounded-2xl bg-white px-3 py-3 text-slate-600">
+                    블록 <div className="mt-1 text-xl font-semibold text-slate-950">{selectedDocument.block_count}</div>
+                  </div>
                   <div className="rounded-2xl bg-white px-3 py-3 text-slate-600">
                     청크 <div className="mt-1 text-xl font-semibold text-slate-950">{selectedDocument.chunk_count}</div>
                   </div>
@@ -1195,6 +1287,61 @@ export default function AdminPage() {
                   {selectedDocument.error_msg}
                 </div>
               )}
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Document Blocks</p>
+                  <h4 className="mt-2 text-lg font-semibold text-slate-950">최근 block 구조</h4>
+                </div>
+                <div className="text-xs text-slate-400">
+                  {selectedDocument.recent_blocks.length}개 미리보기
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {selectedDocument.recent_blocks.length === 0 && (
+                  <div className="rounded-2xl border border-dashed border-slate-200 px-4 py-6 text-sm text-slate-400">
+                    저장된 block 정보가 없습니다.
+                  </div>
+                )}
+                {selectedDocument.recent_blocks.map((block) => (
+                  <div key={block.block_id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${statusPill(block.block_type)}`}>
+                          {block.block_type}
+                        </span>
+                        <span className="text-xs text-slate-400">block #{block.block_idx}</span>
+                      </div>
+                      <div className="text-xs text-slate-500">{formatBlockLocation(block)}</div>
+                    </div>
+
+                    {block.image_url && (
+                      <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                        <AuthenticatedImage
+                          src={resolveApiUrl(block.image_url) || ""}
+                          alt={`${selectedDocument.file_name} block ${block.block_idx}`}
+                        />
+                      </div>
+                    )}
+
+                    <div className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm leading-6 text-slate-700">
+                      {block.preview_text}
+                    </div>
+
+                    {block.metadata && Object.keys(block.metadata).length > 0 && (
+                      <details className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                        <summary className="cursor-pointer text-sm font-medium text-slate-700">block metadata</summary>
+                        <pre className="mt-3 whitespace-pre-wrap break-words text-xs leading-6 text-slate-600">
+                          {JSON.stringify(block.metadata, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="rounded-3xl border border-slate-200 bg-white p-5">

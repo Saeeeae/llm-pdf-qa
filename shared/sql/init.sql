@@ -188,9 +188,35 @@ CREATE TABLE IF NOT EXISTS doc_image (
 CREATE INDEX idx_doc_image_doc ON doc_image(doc_id);
 
 -- 15. Doc Chunk (vector store with pgvector + tsvector)
+CREATE TABLE IF NOT EXISTS doc_block (
+    block_id SERIAL PRIMARY KEY,
+    doc_id INTEGER NOT NULL REFERENCES document(doc_id) ON DELETE CASCADE,
+    block_idx INTEGER NOT NULL,
+    block_type VARCHAR(30) NOT NULL DEFAULT 'text',
+    page_number INTEGER,
+    sheet_name VARCHAR(255),
+    slide_number INTEGER,
+    section_path TEXT,
+    language VARCHAR(10) DEFAULT 'ko',
+    bbox JSONB,
+    source_text TEXT NOT NULL,
+    normalized_text TEXT,
+    parent_block_id INTEGER REFERENCES doc_block(block_id) ON DELETE SET NULL,
+    image_id INTEGER REFERENCES doc_image(image_id) ON DELETE SET NULL,
+    metadata_json JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_doc_block_doc ON doc_block(doc_id, block_idx);
+CREATE INDEX idx_doc_block_type ON doc_block(block_type);
+CREATE INDEX idx_doc_block_page ON doc_block(doc_id, page_number);
+CREATE INDEX idx_doc_block_norm ON doc_block USING gin(to_tsvector('simple', coalesce(normalized_text, source_text)));
+
+-- 16. Doc Chunk (vector store with pgvector + tsvector)
 CREATE TABLE IF NOT EXISTS doc_chunk (
     chunk_id SERIAL PRIMARY KEY,
     doc_id INTEGER NOT NULL REFERENCES document(doc_id) ON DELETE CASCADE,
+    block_id INTEGER REFERENCES doc_block(block_id) ON DELETE SET NULL,
     chunk_idx INTEGER NOT NULL,
     content TEXT NOT NULL,
     token_cnt INTEGER DEFAULT 0,
@@ -204,10 +230,11 @@ CREATE TABLE IF NOT EXISTS doc_chunk (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_doc_chunk_doc ON doc_chunk(doc_id, chunk_idx);
+CREATE INDEX idx_doc_chunk_block ON doc_chunk(block_id);
 CREATE INDEX idx_chunks_embedding ON doc_chunk USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
 CREATE INDEX idx_chunks_tsv ON doc_chunk USING gin(tsv);
 
--- 16. Graph Entities
+-- 17. Graph Entities
 CREATE TABLE IF NOT EXISTS graph_entities (
     id SERIAL PRIMARY KEY,
     doc_id INTEGER REFERENCES document(doc_id) ON DELETE CASCADE,
@@ -219,7 +246,36 @@ CREATE TABLE IF NOT EXISTS graph_entities (
 CREATE INDEX idx_graph_entities_doc ON graph_entities(doc_id);
 CREATE INDEX idx_graph_entities_name ON graph_entities(entity_name);
 
--- 17. Chat Message
+-- 18. Entity Alias
+CREATE TABLE IF NOT EXISTS entity_alias (
+    id SERIAL PRIMARY KEY,
+    canonical_name TEXT NOT NULL,
+    alias TEXT NOT NULL,
+    normalized_alias TEXT NOT NULL,
+    alias_type VARCHAR(50) DEFAULT 'domain',
+    language VARCHAR(10) DEFAULT 'ko',
+    boost FLOAT DEFAULT 1.0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (normalized_alias, canonical_name)
+);
+CREATE INDEX idx_entity_alias_norm ON entity_alias(normalized_alias);
+CREATE INDEX idx_entity_alias_canonical ON entity_alias(canonical_name);
+
+-- 19. Doc Keyword
+CREATE TABLE IF NOT EXISTS doc_keyword (
+    id SERIAL PRIMARY KEY,
+    doc_id INTEGER NOT NULL REFERENCES document(doc_id) ON DELETE CASCADE,
+    chunk_id INTEGER NOT NULL REFERENCES doc_chunk(chunk_id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL,
+    normalized_keyword TEXT NOT NULL,
+    keyword_type VARCHAR(50) DEFAULT 'token',
+    weight FLOAT DEFAULT 1.0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_doc_keyword_norm ON doc_keyword(normalized_keyword);
+CREATE INDEX idx_doc_keyword_doc ON doc_keyword(doc_id, chunk_id);
+
+-- 20. Chat Message
 CREATE TABLE IF NOT EXISTS chat_msg (
     msg_id SERIAL PRIMARY KEY,
     session_id INTEGER NOT NULL REFERENCES chat_session(session_id) ON DELETE CASCADE,
@@ -230,7 +286,7 @@ CREATE TABLE IF NOT EXISTS chat_msg (
 );
 CREATE INDEX idx_chat_msg_session ON chat_msg(session_id, created_at);
 
--- 18. Message Reference
+-- 21. Message Reference
 CREATE TABLE IF NOT EXISTS msg_ref (
     ref_id SERIAL PRIMARY KEY,
     msg_id INTEGER NOT NULL REFERENCES chat_msg(msg_id) ON DELETE CASCADE,
@@ -241,7 +297,7 @@ CREATE TABLE IF NOT EXISTS msg_ref (
 );
 CREATE INDEX idx_msg_ref_msg ON msg_ref(msg_id);
 
--- 19. Access Request
+-- 22. Access Request
 CREATE TABLE IF NOT EXISTS access_request (
     req_id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
@@ -253,7 +309,7 @@ CREATE TABLE IF NOT EXISTS access_request (
 );
 CREATE INDEX idx_access_request_status ON access_request(status);
 
--- 20. Audit Log
+-- 22. Audit Log
 CREATE TABLE IF NOT EXISTS audit_log (
     log_id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
@@ -268,7 +324,7 @@ CREATE INDEX idx_audit_log_user ON audit_log(user_id);
 CREATE INDEX idx_audit_log_action ON audit_log(action_type);
 CREATE INDEX idx_audit_log_created_at ON audit_log(created_at DESC);
 
--- 21. LLM Config
+-- 23. LLM Config
 CREATE TABLE IF NOT EXISTS llm_config (
     id SERIAL PRIMARY KEY,
     model_name VARCHAR(100) NOT NULL,
@@ -282,7 +338,7 @@ CREATE TABLE IF NOT EXISTS llm_config (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- 22. Web Search Log
+-- 24. Web Search Log
 CREATE TABLE IF NOT EXISTS web_search_log (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
@@ -295,7 +351,7 @@ CREATE TABLE IF NOT EXISTS web_search_log (
 );
 CREATE INDEX idx_web_search_log_user ON web_search_log(user_id);
 
--- 23. Pipeline Logs
+-- 25. Pipeline Logs
 CREATE TABLE IF NOT EXISTS pipeline_logs (
     id SERIAL PRIMARY KEY,
     doc_id INTEGER REFERENCES document(doc_id) ON DELETE CASCADE,
@@ -309,7 +365,7 @@ CREATE TABLE IF NOT EXISTS pipeline_logs (
 CREATE INDEX idx_pipeline_logs_doc ON pipeline_logs(doc_id);
 CREATE INDEX idx_pipeline_logs_status ON pipeline_logs(status);
 
--- 24. Sync Logs
+-- 26. Sync Logs
 CREATE TABLE IF NOT EXISTS sync_logs (
     id SERIAL PRIMARY KEY,
     sync_type VARCHAR(20) CHECK (sync_type IN ('user','file','full','incremental')),
@@ -325,7 +381,7 @@ CREATE TABLE IF NOT EXISTS sync_logs (
 );
 CREATE INDEX idx_sync_logs_status ON sync_logs(status);
 
--- 25. Query Logs
+-- 27. Query Logs
 CREATE TABLE IF NOT EXISTS query_logs (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(user_id),
@@ -344,7 +400,7 @@ CREATE TABLE IF NOT EXISTS query_logs (
 CREATE INDEX idx_query_logs_user ON query_logs(user_id);
 CREATE INDEX idx_query_logs_created ON query_logs(created_at DESC);
 
--- 26. System Job
+-- 28. System Job
 CREATE TABLE IF NOT EXISTS system_job (
     job_id SERIAL PRIMARY KEY,
     job_name VARCHAR(200) NOT NULL,
@@ -357,7 +413,7 @@ CREATE TABLE IF NOT EXISTS system_job (
 );
 CREATE INDEX idx_system_job_type ON system_job(job_type);
 
--- 27. System Health
+-- 29. System Health
 CREATE TABLE IF NOT EXISTS system_health (
     id SERIAL PRIMARY KEY,
     service_name VARCHAR(50) NOT NULL,
@@ -405,12 +461,38 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_document_updated_at BEFORE UPDATE ON document FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_doc_block_updated_at BEFORE UPDATE ON doc_block FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_doc_chunk_updated_at BEFORE UPDATE ON doc_chunk FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_chat_session_updated_at BEFORE UPDATE ON chat_session FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Seed Data
 INSERT INTO department (name) VALUES ('Admin'), ('Research'), ('Clinical_Team'), ('QA') ON CONFLICT (name) DO NOTHING;
 INSERT INTO roles (role_name, auth_level) VALUES ('Admin', 100), ('Manager', 50), ('Member', 10), ('Viewer', 1) ON CONFLICT (role_name) DO NOTHING;
+INSERT INTO entity_alias (canonical_name, alias, normalized_alias, alias_type, language, boost) VALUES
+('milestone', 'milestone', 'milestone', 'business', 'en', 1.15),
+('milestone', '마일스톤', '마일스톤', 'business', 'ko', 1.15),
+('upfront', 'upfront', 'upfront', 'business', 'en', 1.15),
+('upfront', '계약금', '계약금', 'business', 'ko', 1.15),
+('term sheet', 'term sheet', 'term sheet', 'business', 'en', 1.10),
+('term sheet', '텀싯', '텀싯', 'business', 'ko', 1.10),
+('preclinical', 'preclinical', 'preclinical', 'drug_dev', 'en', 1.10),
+('preclinical', '비임상', '비임상', 'drug_dev', 'ko', 1.10),
+('clinical', 'clinical', 'clinical', 'drug_dev', 'en', 1.05),
+('clinical', '임상', '임상', 'drug_dev', 'ko', 1.05),
+('efficacy', 'efficacy', 'efficacy', 'drug_dev', 'en', 1.10),
+('efficacy', '유효성', '유효성', 'drug_dev', 'ko', 1.10),
+('safety', 'safety', 'safety', 'drug_dev', 'en', 1.10),
+('safety', '안전성', '안전성', 'drug_dev', 'ko', 1.10),
+('target', 'target', 'target', 'drug_dev', 'en', 1.10),
+('target', '타깃', '타깃', 'drug_dev', 'ko', 1.10),
+('target', '타겟', '타겟', 'drug_dev', 'ko', 1.10),
+('indication', 'indication', 'indication', 'drug_dev', 'en', 1.10),
+('indication', '적응증', '적응증', 'drug_dev', 'ko', 1.10),
+('nsclc', 'NSCLC', 'nsclc', 'drug_dev', 'en', 1.20),
+('nsclc', '비소세포폐암', '비소세포폐암', 'drug_dev', 'ko', 1.20),
+('cmc', 'CMC', 'cmc', 'drug_dev', 'en', 1.05),
+('cmc', '제조품질', '제조품질', 'drug_dev', 'ko', 1.05)
+ON CONFLICT (normalized_alias, canonical_name) DO NOTHING;
 INSERT INTO llm_config (model_name, vllm_url, is_active) VALUES ('qwen2.5-72b', 'http://vllm-server:8000/v1', TRUE);
 
 -- Views

@@ -6,7 +6,8 @@ from shared.event_logger import get_event_logger
 from shared.models.orm import Document, PipelineLog
 
 from rag_pipeline.pipeline.parser import parse_document
-from rag_pipeline.pipeline.chunker import chunk_text
+from rag_pipeline.pipeline.block_indexer import sync_document_blocks
+from rag_pipeline.pipeline.chunker import chunk_parse_blocks, chunk_text
 from rag_pipeline.pipeline.embedder import embed_chunks
 from rag_pipeline.pipeline.indexer import index_chunks
 from rag_pipeline.pipeline.image_store import sync_document_images
@@ -75,19 +76,32 @@ def process_document(doc_id: int):
         with elog.timed("mineru_parse", doc_id=doc_id):
             log_stage(doc_id, "mineru_parse", "running")
             parse_result = parse_document(file_path)
-            stored_image_count = sync_document_images(doc_id, parse_result.images)
+            stored_image_count, image_id_map = sync_document_images(doc_id, parse_result.images)
+            block_id_map = sync_document_blocks(doc_id, parse_result.blocks, image_id_map=image_id_map)
             log_stage(doc_id, "mineru_parse", "success", metadata={
                 "pages": parse_result.total_pages,
                 "images": stored_image_count,
+                "blocks": len(parse_result.blocks),
             })
         elog.info("Parsed document", doc_id=doc_id,
-                  details={"pages": parse_result.total_pages, "images": stored_image_count})
+                  details={
+                      "pages": parse_result.total_pages,
+                      "images": stored_image_count,
+                      "blocks": len(parse_result.blocks),
+                  })
 
         # Stage 2: Chunking
         current_stage = "chunk"
         with elog.timed("chunk", doc_id=doc_id):
             log_stage(doc_id, "chunk", "running")
-            chunks = chunk_text(parse_result.raw_text)
+            if parse_result.blocks:
+                chunks = chunk_parse_blocks(parse_result.blocks)
+                for chunk in chunks:
+                    local_block_idx = chunk.get("block_idx")
+                    if local_block_idx is not None:
+                        chunk["block_id"] = block_id_map.get(local_block_idx)
+            else:
+                chunks = chunk_text(parse_result.raw_text)
             log_stage(doc_id, "chunk", "success", metadata={"count": len(chunks)})
         elog.info("Chunked document", doc_id=doc_id, details={"chunk_count": len(chunks)})
 
@@ -138,6 +152,7 @@ def process_document(doc_id: int):
         elog.info("Pipeline complete", doc_id=doc_id, details={
             "file": file_name,
             "pages": parse_result.total_pages,
+            "blocks": len(parse_result.blocks),
             "chunks": len(chunks),
             "entities": len(entities),
         })

@@ -7,10 +7,17 @@ Uses rag_pipeline.config instead of app.config.
 import logging
 import re
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:  # pragma: no cover - exercised in lightweight test/dev envs
+    RecursiveCharacterTextSplitter = None
 
 from rag_pipeline.config import pipeline_settings
+
+if TYPE_CHECKING:
+    from rag_pipeline.pipeline.parser import ParseBlock
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +135,22 @@ def _merge_small_sections(sections: list[str], min_tokens: int) -> list[str]:
 
 
 def _split_by_tokens(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
+    if RecursiveCharacterTextSplitter is None:
+        words = text.split()
+        if not words:
+            return []
+
+        chunks: list[str] = []
+        step = max(1, chunk_size - chunk_overlap)
+        start = 0
+        while start < len(words):
+            window = words[start:start + chunk_size]
+            if not window:
+                break
+            chunks.append(" ".join(window))
+            start += step
+        return chunks
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -184,3 +207,52 @@ def chunk_text(
         }
         for i, c in enumerate(chunks)
     ]
+
+
+def chunk_parse_blocks(
+    blocks: list["ParseBlock"],
+    chunk_size: int | None = None,
+    chunk_overlap: int | None = None,
+) -> list[dict]:
+    """Chunk parser blocks while preserving multimodal metadata."""
+    if not blocks:
+        return []
+
+    chunk_size = chunk_size or pipeline_settings.chunk_size
+    chunk_overlap = chunk_overlap or pipeline_settings.chunk_overlap
+
+    items: list[dict] = []
+    chunk_idx = 0
+
+    for block_idx, block in enumerate(blocks):
+        text = (block.source_text or "").strip()
+        if not text:
+            continue
+
+        if token_length(text) <= chunk_size:
+            parts = [text]
+        else:
+            parts = _split_by_tokens(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+        for part in parts:
+            content = part.strip()
+            if not content:
+                continue
+
+            items.append(
+                {
+                    "text": content,
+                    "token_cnt": token_length(content),
+                    "chunk_idx": chunk_idx,
+                    "chunk_type": block.block_type,
+                    "page_number": block.page_number,
+                    "sheet_name": block.sheet_name,
+                    "slide_number": block.slide_number,
+                    "section_path": block.section_path,
+                    "language": block.language,
+                    "block_idx": block_idx,
+                }
+            )
+            chunk_idx += 1
+
+    return items

@@ -1,12 +1,16 @@
 import logging
 from neo4j import GraphDatabase
+from shared.db import get_session
 from shared.config import shared_settings
+from shared.search_terms import extract_candidate_terms, expand_terms, get_alias_rows
 
 logger = logging.getLogger(__name__)
 
 
 def get_graph_context(query: str, max_hops: int = 2) -> str:
-    keywords = [w.strip() for w in query.split() if len(w.strip()) > 1]
+    with get_session() as db_session:
+        alias_rows = get_alias_rows(db_session)
+    keywords = expand_terms(extract_candidate_terms(query) + [query], alias_rows)[:8]
     if not keywords:
         return ""
     try:

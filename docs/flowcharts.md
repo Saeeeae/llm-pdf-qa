@@ -33,6 +33,8 @@ graph TB
         PAPI[Pipeline API]
         ORC[Orchestrator]
         PARSE[MinerU Parser]
+        BLOCK[Block Indexer]
+        IMGSTORE[Image Store]
         CHUNK[Chunker]
         EMBED[Embedder<br/>BGE-M3]
         INDEX[Indexer]
@@ -75,6 +77,10 @@ graph TB
     CELERY --> ORC
     ORC --> PARSE
     PARSE -->|OCR| MINERU
+    ORC --> IMGSTORE
+    IMGSTORE --> PG
+    ORC --> BLOCK
+    BLOCK --> PG
     ORC --> CHUNK
     ORC --> EMBED
     ORC --> INDEX
@@ -103,12 +109,15 @@ flowchart TD
     CHECK -->|pending| PROC[status → processing]
     CHECK -->|processing/indexed| SKIP([스킵])
 
-    PROC --> PARSE[MinerU Parse]
-    PARSE -->|OCR + 레이아웃 분석| TEXT[텍스트 + 이미지 추출]
+    PROC --> PARSE[MinerU / Local Parse]
+    PARSE -->|OCR + 레이아웃 분석| BLOCKS[text/table/caption/image block 생성]
     PARSE -->|실패| FAIL
 
-    TEXT --> CHUNK[Hybrid Chunking]
-    CHUNK -->|시맨틱 + 토큰 기반<br/>512 tokens, 50 overlap| CHUNKS[청크 리스트]
+    BLOCKS --> IMG[doc_image 저장]
+    BLOCKS --> BINDEX[doc_block 저장]
+    IMG --> BINDEX
+    BINDEX --> CHUNK[Block-aware Chunking]
+    CHUNK -->|시맨틱 + 토큰 기반<br/>block metadata 유지| CHUNKS[청크 리스트]
     CHUNK -->|실패| FAIL
 
     CHUNKS --> EMPTY{청크 0개?}
@@ -120,7 +129,7 @@ flowchart TD
     EMBED -->|실패| FAIL
 
     VECS --> INDEX[pgvector Index]
-    INDEX -->|HNSW insert<br/>tsvector 자동 생성| PG[(PostgreSQL)]
+    INDEX -->|HNSW insert<br/>tsvector 자동 생성| PG[(PostgreSQL<br/>document/doc_block/doc_chunk/doc_image)]
     INDEX -->|실패| FAIL
 
     PG --> GRAPH[Graph Extract]
@@ -141,8 +150,8 @@ flowchart TD
 
 | stage | 설명 |
 |-------|------|
-| `mineru_parse` | MinerU OCR 파싱 (pages 수 기록) |
-| `chunk` | 텍스트 청킹 (chunk 수 기록) |
+| `mineru_parse` | MinerU/로컬 파싱 + image/block 저장 (pages, images, blocks 수 기록) |
+| `chunk` | block-aware 청킹 (chunk 수 기록) |
 | `embed` | BGE-M3 임베딩 |
 | `index` | pgvector 인덱싱 |
 | `graph_extract` | Neo4j 엔티티 추출 (entity 수 기록) |
@@ -166,12 +175,15 @@ flowchart TD
     EMBED --> SEARCH{Parallel Search}
     SEARCH --> DENSE[Dense Search<br/>pgvector cosine similarity]
     SEARCH --> SPARSE[Sparse Search<br/>tsvector ts_rank]
+    SEARCH --> KEYWORD[Keyword Search<br/>doc_keyword]
 
     DENSE --> RBAC[RBAC 필터]
     SPARSE --> RBAC
+    KEYWORD --> RBAC
     RBAC -->|dept_id + folder_access| RRF[RRF Merge<br/>k=60]
 
-    RRF --> RERANK[BGE-reranker-v2-m3<br/>top-20 → top-5]
+    RRF --> BOOST[block-aware boost<br/>table/image/caption/sheet/slide]
+    BOOST --> RERANK[BGE-reranker-v2-m3<br/>metadata 포함 top-20 → top-5]
 
     RERANK --> GRAPH[Neo4j Graph Context<br/>NER → 2-hop 탐색]
 
@@ -185,7 +197,7 @@ flowchart TD
     SAVE[DB 저장]
     SAVE --> MSG_U[user 메시지 저장]
     SAVE --> MSG_A[assistant 메시지 저장]
-    SAVE --> REFS[msg_ref 참조 저장]
+    SAVE --> REFS[msg_ref 참조 저장<br/>chunk_id + doc_id]
     SAVE --> QLOG[query_logs 기록]
     SAVE --> ALOG[audit_log 기록]
     SAVE --> DONE_EVT[done 이벤트 전송]

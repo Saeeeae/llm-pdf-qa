@@ -79,6 +79,7 @@ services:
     volumes:
       - ${EMBEDDING_MODEL_DIR:-/data/models/embedding}:/models/embedding:ro
       - ${RERANKER_MODEL_DIR:-/data/models/reranker}:/models/reranker:ro
+      - ${IMAGE_STORE_DIR:-/data/images}:/data/images
     deploy:
       resources:
         reservations:

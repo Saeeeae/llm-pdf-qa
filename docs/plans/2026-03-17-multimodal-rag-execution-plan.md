@@ -250,6 +250,13 @@
 - 이미지 요약 또는 vision caption 단계 추가
 - block 단위 embedding + metadata 저장
 
+### 현재 구현 상태 (2026-03-18)
+
+- `doc_block` 테이블 및 `doc_chunk.block_id` 연결 구현
+- DOCX/XLSX/PPTX/MinerU parse 결과를 block 단위로 저장
+- block-aware chunking, block-aware ranking, 관리자 콘솔 `block_count`/block preview 노출 완료
+- 아직 미완료: block-level retrieval, table/image 전용 reranking, vision caption
+
 ### 완료 기준
 
 - 표 질문 시 본문 대신 표가 근거로 회수됨

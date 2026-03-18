@@ -259,8 +259,14 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 refs = [
                     {
                         "doc_id": c["doc_id"],
+                        "chunk_id": c["chunk_id"],
+                        "block_id": c.get("block_id"),
                         "file_name": c["file_name"],
                         "page": c.get("page_number"),
+                        "sheet_name": c.get("sheet_name"),
+                        "slide_number": c.get("slide_number"),
+                        "section_path": c.get("section_path"),
+                        "block_type": c.get("block_type") or c.get("chunk_type"),
                         "score": round(c.get("rerank_score", c.get("rrf_score", 0)), 3),
                     }
                     for c in reranked_chunks
@@ -308,11 +314,21 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                     session_id=session_id,
                     prompt=req.message,
                     retrieved_chunks=[
-                        {"chunk_id": c["chunk_id"], "rrf_score": round(c.get("rrf_score", 0), 4)}
+                        {
+                            "chunk_id": c["chunk_id"],
+                            "block_id": c.get("block_id"),
+                            "block_type": c.get("block_type") or c.get("chunk_type"),
+                            "rrf_score": round(c.get("rrf_score", 0), 4),
+                        }
                         for c in context_chunks[:10]
                     ],
                     reranked_chunks=[
-                        {"chunk_id": c["chunk_id"], "rerank_score": round(c.get("rerank_score", 0), 4)}
+                        {
+                            "chunk_id": c["chunk_id"],
+                            "block_id": c.get("block_id"),
+                            "block_type": c.get("block_type") or c.get("chunk_type"),
+                            "rerank_score": round(c.get("rerank_score", 0), 4),
+                        }
                         for c in reranked_chunks
                     ],
                     graph_context={"text": graph_ctx} if graph_ctx else None,

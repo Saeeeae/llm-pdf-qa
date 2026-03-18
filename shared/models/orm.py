@@ -184,6 +184,7 @@ class Document(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
+    blocks = relationship("DocBlock", back_populates="document", cascade="all, delete-orphan")
     chunks = relationship("DocChunk", back_populates="document", cascade="all, delete-orphan")
     images = relationship("DocImage", back_populates="document", cascade="all, delete-orphan")
 
@@ -204,11 +205,38 @@ class DocImage(Base):
     document = relationship("Document", back_populates="images")
 
 
+class DocBlock(Base):
+    __tablename__ = "doc_block"
+
+    block_id = Column(Integer, primary_key=True, autoincrement=True)
+    doc_id = Column(Integer, ForeignKey("document.doc_id", ondelete="CASCADE"), nullable=False)
+    block_idx = Column(Integer, nullable=False)
+    block_type = Column(String(30), nullable=False, default="text")
+    page_number = Column(Integer)
+    sheet_name = Column(String(255))
+    slide_number = Column(Integer)
+    section_path = Column(Text)
+    language = Column(String(10), default="ko")
+    bbox = Column(JSON)
+    source_text = Column(Text, nullable=False)
+    normalized_text = Column(Text)
+    parent_block_id = Column(Integer, ForeignKey("doc_block.block_id", ondelete="SET NULL"))
+    image_id = Column(Integer, ForeignKey("doc_image.image_id", ondelete="SET NULL"))
+    metadata_json = Column(JSON)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="blocks")
+    image = relationship("DocImage")
+    parent_block = relationship("DocBlock", remote_side=[block_id])
+
+
 class DocChunk(Base):
     __tablename__ = "doc_chunk"
 
     chunk_id = Column(Integer, primary_key=True, autoincrement=True)
     doc_id = Column(Integer, ForeignKey("document.doc_id", ondelete="CASCADE"), nullable=False)
+    block_id = Column(Integer, ForeignKey("doc_block.block_id", ondelete="SET NULL"))
     chunk_idx = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
     token_cnt = Column(Integer, default=0)
@@ -221,6 +249,7 @@ class DocChunk(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     document = relationship("Document", back_populates="chunks")
+    block = relationship("DocBlock")
     image = relationship("DocImage")
 
 
@@ -232,6 +261,32 @@ class GraphEntity(Base):
     entity_name = Column(Text, nullable=False)
     entity_type = Column(String(50))
     neo4j_node_id = Column(Text)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class EntityAlias(Base):
+    __tablename__ = "entity_alias"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    canonical_name = Column(Text, nullable=False)
+    alias = Column(Text, nullable=False)
+    normalized_alias = Column(Text, nullable=False)
+    alias_type = Column(String(50), default="domain")
+    language = Column(String(10), default="ko")
+    boost = Column(Float, default=1.0)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class DocKeyword(Base):
+    __tablename__ = "doc_keyword"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    doc_id = Column(Integer, ForeignKey("document.doc_id", ondelete="CASCADE"), nullable=False)
+    chunk_id = Column(Integer, ForeignKey("doc_chunk.chunk_id", ondelete="CASCADE"), nullable=False)
+    keyword = Column(Text, nullable=False)
+    normalized_keyword = Column(Text, nullable=False)
+    keyword_type = Column(String(50), default="token")
+    weight = Column(Float, default=1.0)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

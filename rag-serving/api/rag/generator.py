@@ -18,7 +18,14 @@ def build_messages(system_prompt: str, context_chunks: list[dict], graph_context
         chunk_parts = []
         for i, chunk in enumerate(context_chunks, 1):
             page = f" p.{chunk['page_number']}" if chunk.get("page_number") else ""
-            chunk_parts.append(f"[문서 {i}: {chunk['file_name']}{page}]\n{chunk['content'][:500]}")
+            sheet = f" sheet={chunk['sheet_name']}" if chunk.get("sheet_name") else ""
+            slide = f" slide={chunk['slide_number']}" if chunk.get("slide_number") else ""
+            section = f" section={chunk['section_path']}" if chunk.get("section_path") else ""
+            block_type = chunk.get("block_type") or chunk.get("chunk_type") or "text"
+            chunk_parts.append(
+                f"[문서 {i}: {chunk['file_name']}{page}{sheet}{slide} type={block_type}{section}]\n"
+                f"{chunk['content'][:500]}"
+            )
         parts.append("=== 관련 문서 ===\n" + "\n\n".join(chunk_parts) + "\n=== 문서 끝 ===")
         parts.append("위 문서를 참고하여 답변하세요. 문서에 없는 내용은 모른다고 알려주세요.")
     if web_results:

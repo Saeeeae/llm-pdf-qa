@@ -1,14 +1,16 @@
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import func, or_, text
 
 from rag_serving.api.auth.dependencies import get_current_user, require_admin
 from rag_serving.api.auth.password import hash_password
 from shared.models.orm import (
-    AuditLog, Department, DocChunk, DocFolder, DocImage, Document, EventLog,
+    AuditLog, Department, DocBlock, DocChunk, DocFolder, DocImage, Document, EventLog,
     GraphEntity, LLMConfig, PipelineLog, QueryLog, Role, SyncLog, User,
 )
 from shared.db import get_session
@@ -147,6 +149,7 @@ class AdminDocumentListItem(BaseModel):
     folder_name: str | None
     dept_name: str | None
     role_name: str | None
+    block_count: int
     chunk_count: int
     image_count: int
     entity_count: int
@@ -167,8 +170,25 @@ class PipelineLogItem(BaseModel):
     metadata: dict | None = None
 
 
+class AdminDocumentBlockItem(BaseModel):
+    block_id: int
+    block_idx: int
+    block_type: str
+    page_number: int | None
+    sheet_name: str | None
+    slide_number: int | None
+    section_path: str | None
+    language: str | None
+    preview_text: str
+    source_text: str
+    image_id: int | None
+    image_url: str | None
+    metadata: dict | None = None
+
+
 class AdminDocumentDetailResponse(AdminDocumentListItem):
     recent_pipeline_logs: list[PipelineLogItem]
+    recent_blocks: list[AdminDocumentBlockItem]
 
 
 def _document_base_query(session):
@@ -186,6 +206,14 @@ def _document_base_query(session):
             func.count(DocImage.image_id).label("image_count"),
         )
         .group_by(DocImage.doc_id)
+        .subquery()
+    )
+    block_counts = (
+        session.query(
+            DocBlock.doc_id.label("doc_id"),
+            func.count(DocBlock.block_id).label("block_count"),
+        )
+        .group_by(DocBlock.doc_id)
         .subquery()
     )
     entity_counts = (
@@ -210,6 +238,7 @@ def _document_base_query(session):
             DocFolder.folder_name.label("folder_name"),
             Department.name.label("dept_name"),
             Role.role_name.label("role_name"),
+            func.coalesce(block_counts.c.block_count, 0).label("block_count"),
             func.coalesce(chunk_counts.c.chunk_count, 0).label("chunk_count"),
             func.coalesce(image_counts.c.image_count, 0).label("image_count"),
             func.coalesce(entity_counts.c.entity_count, 0).label("entity_count"),
@@ -220,6 +249,7 @@ def _document_base_query(session):
         .outerjoin(Department, Department.dept_id == Document.dept_id)
         .outerjoin(Role, Role.role_id == Document.role_id)
         .outerjoin(DocFolder, DocFolder.folder_id == Document.folder_id)
+        .outerjoin(block_counts, block_counts.c.doc_id == Document.doc_id)
         .outerjoin(chunk_counts, chunk_counts.c.doc_id == Document.doc_id)
         .outerjoin(image_counts, image_counts.c.doc_id == Document.doc_id)
         .outerjoin(entity_counts, entity_counts.c.doc_id == Document.doc_id)
@@ -239,12 +269,34 @@ def _serialize_document_row(row) -> AdminDocumentListItem:
         folder_name=row.folder_name,
         dept_name=row.dept_name,
         role_name=row.role_name,
+        block_count=row.block_count or 0,
         chunk_count=row.chunk_count or 0,
         image_count=row.image_count or 0,
         entity_count=row.entity_count or 0,
         error_msg=row.error_msg,
         created_at=row.created_at.isoformat() if row.created_at else "",
         updated_at=row.updated_at.isoformat() if row.updated_at else "",
+    )
+
+
+def _serialize_block_row(row) -> AdminDocumentBlockItem:
+    source_text = row.source_text or ""
+    preview_text = source_text if len(source_text) <= 240 else source_text[:237] + "..."
+    image_url = f"/api/v1/admin/images/{row.image_id}" if row.image_id else None
+    return AdminDocumentBlockItem(
+        block_id=row.block_id,
+        block_idx=row.block_idx,
+        block_type=row.block_type,
+        page_number=row.page_number,
+        sheet_name=row.sheet_name,
+        slide_number=row.slide_number,
+        section_path=row.section_path,
+        language=row.language,
+        preview_text=preview_text,
+        source_text=source_text,
+        image_id=row.image_id,
+        image_url=image_url,
+        metadata=row.metadata_json,
     )
 
 
@@ -255,7 +307,7 @@ def doc_stats(admin: User = Depends(require_admin)):
             total=session.query(Document).count(),
             indexed=session.query(Document).filter(Document.status == "indexed").count(),
             failed=session.query(Document).filter(Document.status == "failed").count(),
-            pending=session.query(Document).filter(Document.status == "pending").count(),
+            pending=session.query(Document).filter(Document.status.in_(["pending", "processing"])).count(),
         )
 
 
@@ -300,6 +352,13 @@ def get_document_detail(doc_id: int, admin: User = Depends(require_admin)):
             .limit(10)
             .all()
         )
+        blocks = (
+            session.query(DocBlock)
+            .filter(DocBlock.doc_id == doc_id)
+            .order_by(DocBlock.block_idx.asc())
+            .limit(24)
+            .all()
+        )
 
     item = _serialize_document_row(row)
     return AdminDocumentDetailResponse(
@@ -318,7 +377,41 @@ def get_document_detail(doc_id: int, admin: User = Depends(require_admin)):
             )
             for log, file_name in logs
         ],
+        recent_blocks=[_serialize_block_row(block) for block in blocks],
     )
+
+
+@router.get("/documents/{doc_id}/blocks", response_model=list[AdminDocumentBlockItem])
+def list_document_blocks(
+    doc_id: int,
+    limit: int = 100,
+    block_type: str | None = None,
+    admin: User = Depends(require_admin),
+):
+    with get_session() as session:
+        if not session.query(Document.doc_id).filter(Document.doc_id == doc_id).first():
+            raise HTTPException(status_code=404, detail="Document not found")
+
+        query = session.query(DocBlock).filter(DocBlock.doc_id == doc_id)
+        if block_type:
+            query = query.filter(DocBlock.block_type == block_type)
+        blocks = query.order_by(DocBlock.block_idx.asc()).limit(limit).all()
+        return [_serialize_block_row(block) for block in blocks]
+
+
+@router.get("/images/{image_id}")
+def get_document_image(image_id: int, admin: User = Depends(require_admin)):
+    with get_session() as session:
+        image = session.query(DocImage).filter(DocImage.image_id == image_id).first()
+        if not image:
+            raise HTTPException(status_code=404, detail="Image not found")
+        image_path = Path(image.image_path)
+
+    if not image_path.exists() or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="Image file missing")
+
+    media_type = f"image/{(image.image_type or image_path.suffix.lstrip('.')).lower()}"
+    return FileResponse(str(image_path), media_type=media_type)
 
 
 class RecentPipelineFailureItem(BaseModel):
@@ -364,7 +457,7 @@ def system_summary(admin: User = Depends(require_admin)):
             total=session.query(Document).count(),
             indexed=session.query(Document).filter(Document.status == "indexed").count(),
             failed=session.query(Document).filter(Document.status == "failed").count(),
-            pending=session.query(Document).filter(Document.status == "pending").count(),
+            pending=session.query(Document).filter(Document.status.in_(["pending", "processing"])).count(),
         )
         active_users_7d = (
             session.query(func.count(func.distinct(QueryLog.user_id)))
