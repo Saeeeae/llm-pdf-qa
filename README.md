@@ -186,6 +186,12 @@ DOC_WATCH_DIR=/path/to/your/documents
 # 전체 서비스
 make up
 
+# macOS / Apple Silicon 로컬 smoke (MinerU 제외)
+make up-local
+
+# 프론트 / 관리자 UI만 빠르게 확인
+make up-local-ui
+
 # GPU 포함 (vLLM)
 make up-gpu
 
@@ -268,11 +274,25 @@ VLLM_BASE_URL=mock://local
 맥북 M2 같은 로컬 개발 환경에서는 아래처럼 로컬 override를 함께 사용하는 편이 안정적입니다.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.local.yml ps
+make up-local
+make ps-local
 ```
 
+`make up-local`은 로컬 smoke 기준으로 MinerU를 제외한 핵심 스택만 올립니다. 프론트와 관리자 화면만 빠르게 확인하려면 `make up-local-ui`를 사용하면 됩니다.
+
 운영 배포 기준은 Ubuntu 24.04 + Intel Xeon + NVIDIA L40S이며, 이 경우에는 기본 `docker-compose.yml` 경로를 사용합니다.
+
+### Phase 0 재검증 체크리스트
+
+- `make ps` 또는 `make ps-local`에서 `postgres`, `redis`, `pipeline-api`, `pipeline-worker`, `serving-api`, `sync-scheduler`, `frontend`가 `Up` 상태인지 확인
+- `document`, `pipeline_logs`, `sync_logs` 테이블이 실제로 존재하는지 확인
+- 샘플 문서가 `document.status='indexed'`로 들어왔는지 확인
+- `pipeline_logs`에 `mineru_parse -> chunk -> embed -> index -> graph_extract` 성공 이력이 남는지 확인
+- `http://localhost:3000` 로그인과 `http://localhost:3000/admin` 접근이 되는지 확인
+- 관리자 화면 문서 상세에서 `chunk_count`, `entity_count`, 최근 파이프라인 로그가 보이는지 확인
+- 채팅 세션 생성 후 문서 reference가 포함된 응답이 나오는지 확인
+- PDF 또는 이미지 문서를 넣었을 때 `doc_image`와 `IMAGE_STORE_DIR` 아래에 산출물이 남는지 확인
+- Neo4j Browser 로그인 시 `.env`의 `NEO4J_PASSWORD`로 접속되는지 확인
 
 ### 2. 샘플 문서 sync / pipeline 확인
 
@@ -374,6 +394,14 @@ frontend/node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
 
 - 프론트 ESLint는 현재 레포에 `eslint.config.js`가 없어 직접 실행 시 실패할 수 있습니다.
 - Streamlit 운영 대시보드는 `http://localhost:8003`, Next.js 관리자 콘솔은 `http://localhost:3000/admin`입니다.
+
+### 7. 트러블슈팅
+
+- `sync_logs`, `pipeline_logs` 등 일부 테이블이 없다고 나오면 기존 PostgreSQL 볼륨에 오래된 스키마가 남아 있는 경우가 많습니다. `make db-reset` 또는 PostgreSQL 데이터 디렉터리 초기화 후 다시 시작하세요.
+- `FATAL: database "admin" does not exist`는 잘못된 `psql` 접속 또는 오래된 healthcheck 로그일 가능성이 큽니다. 현재 기본 DB 이름은 `rag_system`입니다.
+- Neo4j 비밀번호를 바꿨는데 로그인이 안 되면 기존 `data/neo4j` 볼륨에 이전 자격 증명이 남아 있는 경우가 흔합니다. 이때는 볼륨을 초기화하고 다시 기동하세요.
+- macOS / Apple Silicon에서는 기본 `make up`보다 `make up-local` 경로가 안정적입니다.
+- DOCX/XLSX/PPTX는 MinerU를 거치지 않고 로컬 파서가 처리합니다. MinerU 경로를 확인하려면 PDF 또는 이미지 파일을 테스트하세요.
 
 ---
 
@@ -978,6 +1006,41 @@ huggingface-cli download Qwen/Qwen2.5-72B-Instruct-AWQ \
 VLLM_TENSOR_PARALLEL=4
 VLLM_GPU_COUNT=4
 ```
+
+로컬 경로 모델을 직접 사용할 수도 있습니다.
+
+```ini
+VLLM_MODEL=/models/vllm/Qwen2.5-72B-Instruct-AWQ
+VLLM_MODEL_DIR=/data/models/vllm
+```
+
+즉, 이 프로젝트는 OpenAI 외부 API가 아니라 온프렘 `vllm-server`를 기본으로 사용하며, `VLLM_MODEL`에는 Hugging Face repo ID와 로컬 모델 경로를 모두 넣을 수 있습니다.
+
+### MinerU API 사용 방식
+
+MinerU API는 별도 마이크로서비스이지만, 현재 프로젝트에서는 주로 `pipeline-worker`가 HTTP로 호출합니다.
+
+- PDF, PNG, JPG, TIFF: `mineru-api`의 `/parse`를 호출
+- DOCX, XLSX, XLS, PPTX: MinerU를 거치지 않고 `rag-pipeline` 내부 로컬 파서 사용
+
+즉, "항상 따로 수동으로 호출해야 하는 서비스"는 아니고, PDF/이미지 계열 문서가 들어올 때 파이프라인에서 자동으로 사용됩니다.
+
+직접 헬스체크나 테스트도 가능합니다.
+
+```bash
+curl http://localhost:9000/health
+
+curl -X POST http://localhost:9000/parse \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "file_path": "/data/documents/sample.pdf",
+    "method": "auto",
+    "backend": "hybrid-auto-engine",
+    "lang": "korean"
+  }'
+```
+
+MinerU 결과물은 `MINERU_OUTPUT_DIR` 아래에 생성되고, 파이프라인은 그중 이미지를 `IMAGE_STORE_DIR`와 `doc_image` 테이블로 옮겨 저장합니다.
 
 ---
 

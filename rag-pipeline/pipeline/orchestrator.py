@@ -9,6 +9,7 @@ from rag_pipeline.pipeline.parser import parse_document
 from rag_pipeline.pipeline.chunker import chunk_text
 from rag_pipeline.pipeline.embedder import embed_chunks
 from rag_pipeline.pipeline.indexer import index_chunks
+from rag_pipeline.pipeline.image_store import sync_document_images
 from rag_pipeline.pipeline.graph_extractor import extract_entities, store_entities
 
 logger = logging.getLogger(__name__)
@@ -74,9 +75,13 @@ def process_document(doc_id: int):
         with elog.timed("mineru_parse", doc_id=doc_id):
             log_stage(doc_id, "mineru_parse", "running")
             parse_result = parse_document(file_path)
-            log_stage(doc_id, "mineru_parse", "success", metadata={"pages": parse_result.total_pages})
+            stored_image_count = sync_document_images(doc_id, parse_result.images)
+            log_stage(doc_id, "mineru_parse", "success", metadata={
+                "pages": parse_result.total_pages,
+                "images": stored_image_count,
+            })
         elog.info("Parsed document", doc_id=doc_id,
-                  details={"pages": parse_result.total_pages, "images": len(getattr(parse_result, 'images', []))})
+                  details={"pages": parse_result.total_pages, "images": stored_image_count})
 
         # Stage 2: Chunking
         current_stage = "chunk"

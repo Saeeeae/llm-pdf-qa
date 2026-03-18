@@ -2,7 +2,7 @@
 # On-Premise RAG-LLM System v2 — Makefile
 # =============================================================================
 
-.PHONY: help up down restart ps logs build clean \
+.PHONY: help up up-local up-local-ui down restart ps ps-local logs build clean \
         up-gpu up-infra up-pipeline up-serving up-sync up-frontend \
         logs-pipeline logs-serving logs-sync logs-vllm logs-mineru \
         shell-pipeline shell-serving shell-sync shell-db \
@@ -17,6 +17,14 @@ help: ## Show this help
 
 up: ## Start all services (CPU mode)
 	docker compose up -d
+
+up-local: ## Start local smoke stack for macOS/Apple Silicon
+	docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
+		postgres redis neo4j pipeline-api pipeline-worker serving-api sync-scheduler frontend
+
+up-local-ui: ## Start minimal local UI/admin stack without MinerU
+	docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
+		postgres redis serving-api frontend
 
 up-gpu: ## Start all services including vLLM (GPU mode)
 	docker compose --profile gpu up -d
@@ -47,6 +55,9 @@ build: ## Build all images
 
 ps: ## Show running containers
 	docker compose ps
+
+ps-local: ## Show running containers for local smoke stack
+	docker compose -f docker-compose.yml -f docker-compose.local.yml ps
 
 # ─── Logs ─────────────────────────────────────────────────────────────────────
 

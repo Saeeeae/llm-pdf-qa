@@ -6,6 +6,15 @@ from rag_pipeline.pipeline.orchestrator import process_document
 def process_document_task(self, doc_id: int):
     try:
         process_document(doc_id)
+    except ValueError as exc:
+        if str(exc).startswith("Document ") and str(exc).endswith(" not found"):
+            app.log.get_default_logger().warning(
+                "Skipping stale pipeline task for missing document doc_id=%s: %s",
+                doc_id,
+                exc,
+            )
+            return
+        self.retry(exc=exc, countdown=30)
     except Exception as exc:
         self.retry(exc=exc, countdown=30)
 
