@@ -1,22 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAuthStore } from "@/lib/auth";
+import { getDefaultRouteForUser, useAuthStore } from "@/lib/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const { login, isLoading } = useAuthStore();
+  const { login, isLoading, user, hasHydrated } = useAuthStore();
   const router = useRouter();
+
+  useEffect(() => {
+    if (!hasHydrated || !user) return;
+    router.replace(getDefaultRouteForUser(user));
+  }, [hasHydrated, router, user]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     try {
-      await login(email, password);
-      router.push("/chat");
+      const authUser = await login(email, password);
+      router.replace(getDefaultRouteForUser(authUser));
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { detail?: string } } };
       setError(axiosErr.response?.data?.detail || "로그인에 실패했습니다.");

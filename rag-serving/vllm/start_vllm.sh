@@ -1,7 +1,7 @@
 #!/bin/bash
 python -m vllm.entrypoints.openai.api_server \
     --model ${VLLM_MODEL_DIR:-/models/llm} \
-    --served-model-name ${VLLM_MODEL_NAME:-qwen2.5-72b} \
+    --served-model-name ${VLLM_SERVED_MODEL_NAME:-local-llm} \
     --tensor-parallel-size ${TP_SIZE:-1} \
     --quantization ${VLLM_QUANTIZATION:-awq} \
     --dtype bfloat16 \

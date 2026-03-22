@@ -1,7 +1,11 @@
 FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    TZ=Etc/UTC
+
 # Install Python 3.11 via deadsnakes PPA (Ubuntu 22.04 only has 3.10)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ >/etc/timezone && \
+    apt-get update && apt-get install -y --no-install-recommends \
     software-properties-common && \
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && apt-get install -y --no-install-recommends \

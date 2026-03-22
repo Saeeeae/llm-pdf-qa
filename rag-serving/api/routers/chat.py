@@ -70,6 +70,9 @@ def _get_active_llm_config() -> LLMConfig:
     with get_session() as session:
         config = session.query(LLMConfig).filter(LLMConfig.is_active == True).first()
         if config:
+            if serving_settings.prefer_env_llm_config:
+                config.model_name = serving_settings.vllm_model_name
+                config.vllm_url = serving_settings.vllm_base_url
             session.expunge(config)
             return config
     fallback = LLMConfig()

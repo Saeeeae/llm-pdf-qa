@@ -493,7 +493,7 @@ INSERT INTO entity_alias (canonical_name, alias, normalized_alias, alias_type, l
 ('cmc', 'CMC', 'cmc', 'drug_dev', 'en', 1.05),
 ('cmc', '제조품질', '제조품질', 'drug_dev', 'ko', 1.05)
 ON CONFLICT (normalized_alias, canonical_name) DO NOTHING;
-INSERT INTO llm_config (model_name, vllm_url, is_active) VALUES ('qwen2.5-72b', 'http://vllm-server:8000/v1', TRUE);
+INSERT INTO llm_config (model_name, vllm_url, is_active) VALUES ('local-llm', 'http://vllm-server:8000/v1', TRUE);
 
 -- Views
 CREATE OR REPLACE VIEW user_activity_summary AS

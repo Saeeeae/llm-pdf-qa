@@ -59,7 +59,7 @@ export default function ChatPage({ params }: { params: Promise<{ sessionId: stri
 
     try {
       const response = await fetch(
-        `${API_BASE}/api/v1/chat/sessions/${sessionId}/stream`,
+        `${API_BASE()}/api/v1/chat/sessions/${sessionId}/stream`,
         {
           method: "POST",
           headers: {

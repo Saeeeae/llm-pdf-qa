@@ -48,6 +48,10 @@ class SharedSettings(BaseSettings):
     reranker_model_dir: str = "/models/reranker"
     reranker_device: str = "cuda"
 
+    # vLLM / generation
+    vllm_base_url: str = "http://vllm-server:8000/v1"
+    vllm_model_name: str = "local-llm"
+
     # JWT
     jwt_secret: str = "CHANGE_THIS_SECRET_IN_PRODUCTION_MIN_32_CHARS"
     jwt_algorithm: str = "HS256"

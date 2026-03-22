@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, text
 
 from rag_serving.api.auth.dependencies import get_current_user, require_admin
 from rag_serving.api.auth.password import hash_password
+from rag_serving.config import serving_settings
 from shared.models.orm import (
     AuditLog, Department, DocBlock, DocChunk, DocFolder, DocImage, Document, EventLog,
     GraphEntity, LLMConfig, PipelineLog, QueryLog, Role, SyncLog, User,
@@ -597,7 +598,9 @@ def get_llm_config(admin: User = Depends(require_admin)):
         if not config:
             raise HTTPException(status_code=404, detail="No active LLM config")
         return LLMConfigResponse(
-            id=config.id, model_name=config.model_name, vllm_url=config.vllm_url,
+            id=config.id,
+            model_name=serving_settings.vllm_model_name if serving_settings.prefer_env_llm_config else config.model_name,
+            vllm_url=serving_settings.vllm_base_url if serving_settings.prefer_env_llm_config else config.vllm_url,
             system_prompt=config.system_prompt, max_tokens=config.max_tokens,
             temperature=config.temperature, top_p=config.top_p,
             context_chunks=config.context_chunks, is_active=config.is_active,
@@ -623,7 +626,9 @@ def update_llm_config(config_id: int, req: UpdateLLMConfigRequest, admin: User =
             config.context_chunks = req.context_chunks
 
         return LLMConfigResponse(
-            id=config.id, model_name=config.model_name, vllm_url=config.vllm_url,
+            id=config.id,
+            model_name=serving_settings.vllm_model_name if serving_settings.prefer_env_llm_config else config.model_name,
+            vllm_url=serving_settings.vllm_base_url if serving_settings.prefer_env_llm_config else config.vllm_url,
             system_prompt=config.system_prompt, max_tokens=config.max_tokens,
             temperature=config.temperature, top_p=config.top_p,
             context_chunks=config.context_chunks, is_active=config.is_active,

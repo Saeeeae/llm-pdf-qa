@@ -63,15 +63,10 @@ def parse_document(req: ParseRequest):
     logger.info("Parsing %s (method=%s, backend=%s, lang=%s)", file_path, method, backend, lang)
 
     try:
-        md_text, pages, images = _parse_with_mineru(file_path, method, backend, lang)
+        md_text, pages, images, output_dir = _parse_with_mineru(file_path, method, backend, lang)
     except Exception as e:
         logger.error("MinerU parsing failed for %s: %s", file_path, e)
         raise HTTPException(status_code=500, detail=f"Parsing failed: {str(e)[:500]}")
-
-    output_dir = os.path.join(
-        MINERU_OUTPUT_DIR,
-        f"{Path(file_path).stem}_last",
-    )
 
     return ParseResponse(
         markdown=md_text,
@@ -87,16 +82,19 @@ def parse_document(req: ParseRequest):
     )
 
 
-def _parse_with_mineru(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict]]:
-    """Run MinerU and return (full_markdown, pages_list, images_list)."""
+def _parse_with_mineru(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict], str]:
+    """Run MinerU and return (full_markdown, pages_list, images_list, output_dir)."""
     try:
         return _parse_via_api(file_path, method, backend, lang)
     except ImportError as e:
         logger.warning("MinerU Python API not available (%s), falling back to CLI", e)
         return _parse_via_cli(file_path, method, backend, lang)
+    except Exception as e:
+        logger.warning("MinerU Python API failed (%s), falling back to CLI", e)
+        return _parse_via_cli(file_path, method, backend, lang)
 
 
-def _parse_via_api(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict]]:
+def _parse_via_api(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict], str]:
     """Use MinerU Python API directly."""
     from mineru.demo.demo import parse_doc
 
@@ -110,10 +108,11 @@ def _parse_via_api(file_path: str, method: str, backend: str, lang: str) -> tupl
         backend=backend,
         method=method,
     )
-    return _read_output(file_path, output_dir)
+    md_text, pages, images = _read_output(file_path, output_dir, backend)
+    return md_text, pages, images, output_dir
 
 
-def _parse_via_cli(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict]]:
+def _parse_via_cli(file_path: str, method: str, backend: str, lang: str) -> tuple[str, list[dict], list[dict], str]:
     """Fallback: use MinerU CLI."""
     import subprocess
 
@@ -141,17 +140,18 @@ def _parse_via_cli(file_path: str, method: str, backend: str, lang: str) -> tupl
         raise RuntimeError(
             f"MinerU CLI failed (exit {result.returncode}): {result.stderr[-500:]}"
         )
-    return _read_output(file_path, output_dir)
+    md_text, pages, images = _read_output(file_path, output_dir, backend)
+    return md_text, pages, images, output_dir
 
 
-def _read_output(file_path: str, output_dir: str) -> tuple[str, list[dict], list[dict]]:
+def _read_output(file_path: str, output_dir: str, backend: str) -> tuple[str, list[dict], list[dict]]:
     """Read markdown output from MinerU output directory."""
     stem = Path(file_path).stem
     output_path = Path(output_dir)
 
     candidate_paths = [
         output_path / stem / "auto" / f"{stem}.md",
-        output_path / stem / MINERU_BACKEND / f"{stem}.md",
+        output_path / stem / backend / f"{stem}.md",
         output_path / stem / f"{stem}.md",
     ]
 
@@ -184,13 +184,20 @@ def _read_output(file_path: str, output_dir: str) -> tuple[str, list[dict], list
 
     # Collect images from images/ directory
     images = []
+    image_files = []
     images_dir = md_path.parent / "images"
     if images_dir.is_dir():
-        for img_file in sorted(images_dir.iterdir()):
-            if img_file.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'):
-                images.append({
-                    "path": str(img_file),
-                    "filename": img_file.name,
-                })
+        image_files.extend(sorted(images_dir.iterdir()))
+    else:
+        image_files.extend(sorted(output_path.rglob("*.png")))
+        image_files.extend(sorted(output_path.rglob("*.jpg")))
+        image_files.extend(sorted(output_path.rglob("*.jpeg")))
+
+    for img_file in image_files:
+        if img_file.suffix.lower() in ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff'):
+            images.append({
+                "path": str(img_file),
+                "filename": img_file.name,
+            })
 
     return md_text, pages, images

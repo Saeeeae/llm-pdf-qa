@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { API_BASE, api } from "@/lib/api";
-import { useAuthStore } from "@/lib/auth";
+import { getDefaultRouteForUser, useAuthStore } from "@/lib/auth";
 
 interface DocStats {
   total: number;
@@ -212,7 +212,7 @@ function formatBlockLocation(block: DocumentBlockItem) {
 function resolveApiUrl(url: string | null) {
   if (!url) return null;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  return `${API_BASE}${url}`;
+  return `${API_BASE()}${url}`;
 }
 
 function AuthenticatedImage({
@@ -307,7 +307,7 @@ function metricCard(
 }
 
 export default function AdminPage() {
-  const { user, fetchMe } = useAuthStore();
+  const { user, fetchMe, hasHydrated } = useAuthStore();
   const router = useRouter();
   const [summary, setSummary] = useState<SystemSummary | null>(null);
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -386,6 +386,8 @@ export default function AdminPage() {
     let cancelled = false;
 
     const bootstrap = async () => {
+      if (!hasHydrated) return;
+
       let currentUser = user;
       if (!currentUser) {
         await fetchMe();
@@ -395,11 +397,11 @@ export default function AdminPage() {
       if (cancelled) return;
 
       if (!currentUser) {
-        router.push("/login");
+        router.replace("/login");
         return;
       }
       if (currentUser.auth_level < 100) {
-        router.push("/chat");
+        router.replace(getDefaultRouteForUser(currentUser));
         return;
       }
 
@@ -412,7 +414,7 @@ export default function AdminPage() {
     return () => {
       cancelled = true;
     };
-  }, [fetchMe, router, user]);
+  }, [fetchMe, hasHydrated, router, user]);
 
   useEffect(() => {
     if (isBootstrapping || !autoRefresh) return;

@@ -3,6 +3,8 @@
 사내 문서(PDF, DOCX, XLSX, PPTX, 이미지)를 기반으로 **ChatGPT/Claude 수준의 UX**를 제공하는 완전 온프레미스 AI 어시스턴트.
 외부 API(OpenAI, Anthropic 등) 미사용 — 보안 최우선. 3-프로젝트 모노레포 구조.
 
+현재 기준 문서는 이 파일과 [flowcharts.md](/Users/sae/Desktop/llm_again/docs/flowcharts.md), [2026-03-17-multimodal-rag-execution-plan.md](/Users/sae/Desktop/llm_again/docs/plans/2026-03-17-multimodal-rag-execution-plan.md)입니다. 과거 설계/구현 초안 문서는 정리했습니다.
+
 ---
 
 ## 아키텍처
@@ -356,6 +358,10 @@ make ps-local
 `make up-local`은 로컬 smoke 기준으로 MinerU를 제외한 핵심 스택만 올립니다. 프론트와 관리자 화면만 빠르게 확인하려면 `make up-local-ui`를 사용하면 됩니다.
 
 운영 배포 기준은 Ubuntu 24.04 + Intel Xeon + NVIDIA L40S이며, 이 경우에는 기본 `docker-compose.yml` 경로를 사용합니다.
+
+### Docker Build 참고
+
+Dockerfile들은 `DEBIAN_FRONTEND=noninteractive`, `TZ=Etc/UTC`를 사용하도록 맞춰 두었습니다. Ubuntu 계열 이미지 빌드 중 지역/시간 선택 프롬프트가 뜨며 멈추던 문제를 피하기 위한 설정입니다.
 
 ### Phase 0 재검증 체크리스트
 
@@ -1095,6 +1101,8 @@ VLLM_MODEL_DIR=/data/models/vllm
 
 MinerU API는 별도 마이크로서비스이지만, 현재 프로젝트에서는 주로 `pipeline-worker`가 HTTP로 호출합니다.
 
+현재 Docker 기본 빌드는 공식 PyPI 최신 버전 기준 `mineru[all]==2.7.6`으로 pinning되어 있습니다. 다른 버전으로 검증해야 하면 `Dockerfile.mineru`의 `MINERU_PIP_SPEC` build arg만 조정하면 됩니다.
+
 - PDF, PNG, JPG, TIFF: `mineru-api`의 `/parse`를 호출
 - DOCX, XLSX, XLS, PPTX: MinerU를 거치지 않고 `rag-pipeline` 내부 로컬 파서 사용
 
@@ -1259,7 +1267,8 @@ limit 20;
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `VLLM_BASE_URL` | `http://vllm-server:8000/v1` | vLLM API URL |
-| `VLLM_MODEL_NAME` | `qwen2.5-72b` | 모델 served name |
+| `VLLM_MODEL_NAME` | `local-llm` | serving runtime이 우선 참조하는 모델명 |
+| `PREFER_ENV_LLM_CONFIG` | `true` | DB의 active LLM config보다 `.env` 값을 우선 적용 |
 | `GOOGLE_API_KEY` | - | Google Custom Search API 키 |
 | `GOOGLE_CX` | - | Google 커스텀 검색 엔진 ID |
 
@@ -1268,3 +1277,9 @@ limit 20;
 | 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `SYNC_INTERVAL_MINUTES` | `30` | 동기화 주기 (분) |
+
+### frontend
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `NEXT_PUBLIC_API_URL` | 빈 값 | 비어 있으면 현재 브라우저 host 기준으로 `:8002`를 사용 |
