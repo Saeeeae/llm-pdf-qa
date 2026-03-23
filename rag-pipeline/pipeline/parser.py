@@ -184,6 +184,23 @@ def _get_http_client() -> httpx.Client:
     return httpx.Client()
 
 
+def _extract_response_detail(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if detail:
+            return str(detail)
+    if payload is not None:
+        return str(payload)
+
+    text = response.text.strip()
+    return text or f"HTTP {response.status_code}"
+
+
 MINERU_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 LOCAL_EXTENSIONS = {".docx", ".xlsx", ".xls", ".pptx"}
 
@@ -213,19 +230,25 @@ def _parse_via_mineru(file_path: str, ext: str) -> ParseResult:
     method = "ocr" if ext in (".png", ".jpg", ".jpeg", ".tif", ".tiff") else "auto"
     timeout = 300.0 if method == "ocr" else 600.0
 
-    response = _get_http_client().post(
-        f"{pipeline_settings.mineru_api_url}/parse",
-        json={
-            "file_path": file_path,
-            "method": method,
-            "backend": pipeline_settings.mineru_backend,
-            "lang": pipeline_settings.mineru_lang,
-        },
-        timeout=timeout,
-    )
+    url = f"{pipeline_settings.mineru_api_url}/parse"
+    try:
+        response = _get_http_client().post(
+            url,
+            json={
+                "file_path": file_path,
+                "method": method,
+                "backend": pipeline_settings.mineru_backend,
+                "lang": pipeline_settings.mineru_lang,
+            },
+            timeout=timeout,
+        )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"MinerU request failed for {file_path} via {url}: {exc}"
+        ) from exc
 
     if response.status_code != 200:
-        detail = response.json().get("detail", response.text)
+        detail = _extract_response_detail(response)
         raise RuntimeError(f"MinerU API error for {file_path}: {detail}")
 
     data = response.json()

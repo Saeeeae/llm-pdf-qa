@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, use } from "react";
 import { api, API_BASE } from "@/lib/api";
+import { ensureValidAccessToken, refreshStoredAccessToken } from "@/lib/auth-storage";
 import ChatMessage from "@/components/ChatMessage";
 import ChatInput from "@/components/ChatInput";
 
@@ -18,6 +19,15 @@ interface Message {
   content: string;
   references?: Reference[];
   isStreaming?: boolean;
+}
+
+async function getResponseErrorMessage(response: Response) {
+  try {
+    const data = (await response.json()) as { detail?: string; message?: string };
+    return data.detail || data.message || `요청에 실패했습니다. (${response.status})`;
+  } catch {
+    return `요청에 실패했습니다. (${response.status})`;
+  }
 }
 
 export default function ChatPage({ params }: { params: Promise<{ sessionId: string }> }) {
@@ -51,30 +61,46 @@ export default function ChatPage({ params }: { params: Promise<{ sessionId: stri
     text: string,
     options: { searchScope: string; useWebSearch: boolean }
   ) => {
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
-    setMessages((prev) => [...prev, { role: "assistant", content: "", isStreaming: true }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: text },
+      { role: "assistant", content: "", isStreaming: true },
+    ]);
     setIsStreaming(true);
 
-    const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : null;
-
     try {
-      const response = await fetch(
-        `${API_BASE()}/api/v1/chat/sessions/${sessionId}/stream`,
-        {
+      const sendStreamRequest = async (accessToken: string | null) =>
+        fetch(`${API_BASE()}/api/v1/chat/sessions/${sessionId}/stream`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
           },
           body: JSON.stringify({
             message: text,
             search_scope: options.searchScope,
             use_web_search: options.useWebSearch,
           }),
-        }
-      );
+        });
 
-      if (!response.body) return;
+      let token = await ensureValidAccessToken(API_BASE);
+      let response = await sendStreamRequest(token);
+
+      if (response.status === 401) {
+        token = await refreshStoredAccessToken(API_BASE);
+        if (!token) {
+          throw new Error("로그인이 만료되었습니다. 다시 로그인해주세요.");
+        }
+        response = await sendStreamRequest(token);
+      }
+
+      if (!response.ok) {
+        throw new Error(await getResponseErrorMessage(response));
+      }
+
+      if (!response.body) {
+        throw new Error("응답 스트림을 시작하지 못했습니다. 다시 시도해주세요.");
+      }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -128,12 +154,13 @@ export default function ChatPage({ params }: { params: Promise<{ sessionId: stri
         };
         return updated;
       });
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "연결 오류가 발생했습니다. 다시 시도해주세요.";
       setMessages((prev) => {
         const updated = [...prev];
         updated[updated.length - 1] = {
           ...updated[updated.length - 1],
-          content: "연결 오류가 발생했습니다. 다시 시도해주세요.",
+          content: message,
           isStreaming: false,
         };
         return updated;

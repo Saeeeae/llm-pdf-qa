@@ -9,7 +9,10 @@ from sqlalchemy import func, or_, text
 
 from rag_serving.api.auth.dependencies import get_current_user, require_admin
 from rag_serving.api.auth.password import hash_password
+from rag_serving.api.rag.retriever import hybrid_search
+from rag_serving.api.rag.reranker import rerank
 from rag_serving.config import serving_settings
+from shared.models.registry import registry
 from shared.models.orm import (
     AuditLog, Department, DocBlock, DocChunk, DocFolder, DocImage, Document, EventLog,
     GraphEntity, LLMConfig, PipelineLog, QueryLog, Role, SyncLog, User,
@@ -299,6 +302,19 @@ def _serialize_block_row(row) -> AdminDocumentBlockItem:
         image_url=image_url,
         metadata=row.metadata_json,
     )
+
+
+def _get_accessible_folder_ids_for_user(user_id: int) -> list[int]:
+    with get_session() as session:
+        rows = session.execute(
+            text(
+                "SELECT folder_id FROM folder_access "
+                "WHERE user_id = :uid AND is_active = TRUE "
+                "AND (expires_at IS NULL OR expires_at > NOW())"
+            ),
+            {"uid": user_id},
+        ).fetchall()
+        return [r.folder_id for r in rows]
 
 
 @router.get("/documents/stats", response_model=DocStats)
@@ -647,6 +663,78 @@ class QueryLogItem(BaseModel):
     created_at: str
 
 
+class QueryDebugRequest(BaseModel):
+    query: str
+    search_scope: str = "all"
+    debug_user_id: int | None = None
+    retrieve_k: int = 20
+    rerank_k: int = 8
+
+
+class RetrievalDebugChunk(BaseModel):
+    chunk_id: int
+    doc_id: int
+    file_name: str
+    block_id: int | None
+    block_type: str | None
+    page_number: int | None
+    sheet_name: str | None
+    slide_number: int | None
+    section_path: str | None
+    retrieval_intent: str | None
+    signal_count: int | None
+    rrf_score: float | None
+    final_score: float | None
+    rerank_score: float | None
+    rerank_model_norm: float | None
+    rerank_prior_norm: float | None
+    rerank_feature_score: float | None
+    freshness_boost: float | None
+    multi_signal_boost: float | None
+    preview_text: str
+
+
+class QueryDebugResponse(BaseModel):
+    query: str
+    search_scope: str
+    target_user_id: int
+    target_dept_id: int
+    retrieval_intent: str
+    retrieve_k: int
+    rerank_k: int
+    retrieved_count: int
+    reranked_count: int
+    retrieved_chunks: list[RetrievalDebugChunk]
+    reranked_chunks: list[RetrievalDebugChunk]
+
+
+def _serialize_retrieval_debug_chunk(chunk: dict) -> RetrievalDebugChunk:
+    content = str(chunk.get("content") or "")
+    preview_text = content if len(content) <= 240 else content[:237] + "..."
+    return RetrievalDebugChunk(
+        chunk_id=int(chunk["chunk_id"]),
+        doc_id=int(chunk["doc_id"]),
+        file_name=str(chunk.get("file_name") or ""),
+        block_id=chunk.get("block_id"),
+        block_type=chunk.get("block_type") or chunk.get("chunk_type"),
+        page_number=chunk.get("page_number"),
+        sheet_name=chunk.get("sheet_name"),
+        slide_number=chunk.get("slide_number"),
+        section_path=chunk.get("section_path"),
+        retrieval_intent=chunk.get("retrieval_intent"),
+        signal_count=chunk.get("signal_count"),
+        rrf_score=round(float(chunk["rrf_score"]), 4) if chunk.get("rrf_score") is not None else None,
+        final_score=round(float(chunk["final_score"]), 4) if chunk.get("final_score") is not None else None,
+        rerank_score=round(float(chunk["rerank_score"]), 4) if chunk.get("rerank_score") is not None else None,
+        rerank_model_norm=round(float(chunk["rerank_model_norm"]), 4) if chunk.get("rerank_model_norm") is not None else None,
+        rerank_prior_norm=round(float(chunk["rerank_prior_norm"]), 4) if chunk.get("rerank_prior_norm") is not None else None,
+        rerank_feature_score=round(float(chunk["rerank_feature_score"]), 4) if chunk.get("rerank_feature_score") is not None else None,
+        freshness_boost=round(float(chunk["freshness_boost"]), 4) if chunk.get("freshness_boost") is not None else None,
+        multi_signal_boost=round(float(chunk["multi_signal_boost"]), 4) if chunk.get("multi_signal_boost") is not None else None,
+        preview_text=preview_text,
+    )
+
+
 @router.get("/queries", response_model=list[QueryLogItem])
 def list_query_logs(
     limit: int = 50,
@@ -673,6 +761,71 @@ def list_query_logs(
             )
             for l in logs
         ]
+
+
+@router.post("/queries/debug", response_model=QueryDebugResponse)
+def debug_query_retrieval(req: QueryDebugRequest, admin: User = Depends(require_admin)):
+    retrieve_k = min(max(req.retrieve_k, 5), 60)
+    rerank_k = min(max(req.rerank_k, 1), retrieve_k)
+
+    with get_session() as session:
+        if req.debug_user_id is not None:
+            target_user = session.query(User).filter(User.user_id == req.debug_user_id).first()
+            if not target_user:
+                raise HTTPException(status_code=404, detail="Debug target user not found")
+        else:
+            target_user = session.query(User).filter(User.user_id == admin.user_id).first()
+            if not target_user:
+                raise HTTPException(status_code=404, detail="Admin user not found")
+        session.expunge(target_user)
+
+    query_vector = registry.embedding().encode(req.query).tolist()
+    accessible_folders = _get_accessible_folder_ids_for_user(target_user.user_id)
+    retrieved_chunks = hybrid_search(
+        query_text=req.query,
+        query_vector=query_vector,
+        dept_id=target_user.dept_id,
+        accessible_folder_ids=accessible_folders,
+        search_scope=req.search_scope,
+        dense_limit=retrieve_k,
+        sparse_limit=retrieve_k,
+        final_limit=retrieve_k,
+    )
+    reranked_chunks = rerank(
+        req.query,
+        [dict(chunk) for chunk in retrieved_chunks],
+        top_k=rerank_k,
+    )
+    retrieval_intent = retrieved_chunks[0].get("retrieval_intent", "general") if retrieved_chunks else "general"
+
+    elog.info(
+        "Admin retrieval debug executed",
+        user_id=admin.user_id,
+        details={
+            "query": req.query[:200],
+            "search_scope": req.search_scope,
+            "debug_user_id": target_user.user_id,
+            "retrieve_k": retrieve_k,
+            "rerank_k": rerank_k,
+            "retrieval_intent": retrieval_intent,
+            "retrieved_count": len(retrieved_chunks),
+            "reranked_count": len(reranked_chunks),
+        },
+    )
+
+    return QueryDebugResponse(
+        query=req.query,
+        search_scope=req.search_scope,
+        target_user_id=target_user.user_id,
+        target_dept_id=target_user.dept_id,
+        retrieval_intent=str(retrieval_intent),
+        retrieve_k=retrieve_k,
+        rerank_k=rerank_k,
+        retrieved_count=len(retrieved_chunks),
+        reranked_count=len(reranked_chunks),
+        retrieved_chunks=[_serialize_retrieval_debug_chunk(chunk) for chunk in retrieved_chunks],
+        reranked_chunks=[_serialize_retrieval_debug_chunk(chunk) for chunk in reranked_chunks],
+    )
 
 
 @router.get("/pipeline-logs", response_model=list[PipelineLogItem])

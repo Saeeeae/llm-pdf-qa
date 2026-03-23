@@ -1,7 +1,8 @@
 "use client";
 
-import { startTransition, useEffect, useState, type ReactNode } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { startTransition, useEffect, useEffectEvent, useState, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -9,6 +10,7 @@ import {
   Clock3,
   Database,
   FileText,
+  LogOut,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -17,7 +19,8 @@ import {
   X,
 } from "lucide-react";
 import { API_BASE, api } from "@/lib/api";
-import { getDefaultRouteForUser, useAuthStore } from "@/lib/auth";
+import { type AuthUser, getDefaultRouteForUser, resetAuthState, useAuthStore } from "@/lib/auth";
+import { getStoredAccessToken } from "@/lib/auth-storage";
 
 interface DocStats {
   total: number;
@@ -267,7 +270,16 @@ function AuthenticatedImage({
     );
   }
 
-  return <img src={blobUrl} alt={alt} className="max-h-72 w-full object-contain bg-slate-100" />;
+  return (
+    <Image
+      src={blobUrl}
+      alt={alt}
+      width={1200}
+      height={720}
+      unoptimized
+      className="max-h-72 w-full object-contain bg-slate-100"
+    />
+  );
 }
 
 function inferStageFromModule(module: string) {
@@ -307,7 +319,7 @@ function metricCard(
 }
 
 export default function AdminPage() {
-  const { user, fetchMe, hasHydrated } = useAuthStore();
+  const { fetchMe, hasHydrated, logout } = useAuthStore();
   const router = useRouter();
   const [summary, setSummary] = useState<SystemSummary | null>(null);
   const [users, setUsers] = useState<UserItem[]>([]);
@@ -327,6 +339,7 @@ export default function AdminPage() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [loadError, setLoadError] = useState("");
+  const [resolvedUser, setResolvedUser] = useState<AuthUser | null>(null);
 
   const loadDocumentDetail = async (docId: number) => {
     setIsDocumentLoading(true);
@@ -382,18 +395,24 @@ export default function AdminPage() {
     }
   };
 
+  const loadAdminDataInEffect = useEffectEvent(async (showBusy = false) => {
+    await loadAdminData(showBusy);
+  });
+
   useEffect(() => {
     let cancelled = false;
 
     const bootstrap = async () => {
       if (!hasHydrated) return;
 
-      let currentUser = user;
-      if (!currentUser) {
-        await fetchMe();
-        currentUser = useAuthStore.getState().user;
+      const accessToken = getStoredAccessToken();
+      if (!accessToken) {
+        resetAuthState();
+        if (!cancelled) router.replace("/login");
+        return;
       }
 
+      const currentUser = await fetchMe();
       if (cancelled) return;
 
       if (!currentUser) {
@@ -405,7 +424,8 @@ export default function AdminPage() {
         return;
       }
 
-      await loadAdminData(true);
+      setResolvedUser(currentUser);
+      await loadAdminDataInEffect(true);
       if (!cancelled) setIsBootstrapping(false);
     };
 
@@ -414,12 +434,12 @@ export default function AdminPage() {
     return () => {
       cancelled = true;
     };
-  }, [fetchMe, hasHydrated, router, user]);
+  }, [fetchMe, hasHydrated, router]);
 
   useEffect(() => {
     if (isBootstrapping || !autoRefresh) return;
     const timer = window.setInterval(() => {
-      loadAdminData(false);
+      void loadAdminDataInEffect(false);
     }, 30000);
     return () => window.clearInterval(timer);
   }, [autoRefresh, isBootstrapping, selectedDocument]);
@@ -460,7 +480,7 @@ export default function AdminPage() {
     );
   }
 
-  if (!user || user.auth_level < 100) return null;
+  if (!resolvedUser || resolvedUser.auth_level < 100) return null;
 
   const failureCount = summary?.recent_pipeline_failures.length ?? 0;
   const healthScore = Math.max(
@@ -487,6 +507,11 @@ export default function AdminPage() {
   const openDocumentDetail = async (docId: number) => {
     setActiveTab("documents");
     await loadDocumentDetail(docId);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace("/login");
   };
 
   return (
@@ -542,12 +567,27 @@ export default function AdminPage() {
                     채팅으로 이동
                     <ArrowRight className="h-4 w-4" />
                   </button>
+                  <button
+                    onClick={handleLogout}
+                    className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
+                  >
+                    로그아웃
+                    <LogOut className="h-4 w-4" />
+                  </button>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">System Health Score</p>
-                  <div className="mt-2 flex items-end gap-3">
-                    <div className="text-3xl font-semibold text-slate-950">{healthScore}</div>
-                    <div className="mb-1 text-sm text-slate-500">/ 100</div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Signed In</p>
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-950">{resolvedUser.usr_name}</div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {resolvedUser.role_name} · {resolvedUser.dept_name || "부서 미지정"}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-3xl font-semibold text-slate-950">{healthScore}</div>
+                      <div className="text-sm text-slate-500">System Health</div>
+                    </div>
                   </div>
                 </div>
               </div>

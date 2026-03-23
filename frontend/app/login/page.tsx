@@ -2,19 +2,40 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { getDefaultRouteForUser, useAuthStore } from "@/lib/auth";
+import { getDefaultRouteForUser, resetAuthState, useAuthStore } from "@/lib/auth";
+import { getStoredAccessToken } from "@/lib/auth-storage";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const { login, isLoading, user, hasHydrated } = useAuthStore();
+  const { login, isLoading, user, hasHydrated, fetchMe } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
-    if (!hasHydrated || !user) return;
-    router.replace(getDefaultRouteForUser(user));
-  }, [hasHydrated, router, user]);
+    if (!hasHydrated) return;
+
+    let cancelled = false;
+
+    const syncAuthenticatedUser = async () => {
+      const accessToken = getStoredAccessToken();
+      if (!accessToken) {
+        if (user) resetAuthState();
+        return;
+      }
+
+      const currentUser = await fetchMe();
+      if (!cancelled && currentUser) {
+        router.replace(getDefaultRouteForUser(currentUser));
+      }
+    };
+
+    syncAuthenticatedUser();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchMe, hasHydrated, router, user]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,7 +63,7 @@ export default function LoginPage() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="이메일 주소"
               required
             />
@@ -53,7 +74,7 @@ export default function LoginPage() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="비밀번호"
               required
             />

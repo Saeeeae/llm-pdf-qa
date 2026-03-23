@@ -87,27 +87,27 @@ export default function Sidebar() {
       </div>
 
       <div className="p-3 border-t border-gray-700">
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-gray-400 min-w-0 mr-2">
+        <div className="text-xs text-gray-400">
+          <div className="min-w-0">
             <p className="font-medium text-gray-300 truncate">{user?.usr_name}</p>
             <p className="truncate">{user?.role_name}</p>
           </div>
-          <div className="flex gap-1.5 shrink-0">
+          <div className="mt-3 flex gap-2">
             {user?.auth_level && user.auth_level >= 100 && (
               <button
                 onClick={() => router.push("/admin")}
-                className="text-gray-500 hover:text-gray-300 transition-colors"
-                title="관리자 패널"
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-700 px-3 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800"
               >
                 <Settings size={15} />
+                관리자 패널
               </button>
             )}
             <button
               onClick={handleLogout}
-              className="text-gray-500 hover:text-gray-300 transition-colors"
-              title="로그아웃"
+              className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-red-900/60 bg-red-950/40 px-3 py-2 text-sm text-red-200 transition-colors hover:bg-red-950/70"
             >
               <LogOut size={15} />
+              로그아웃
             </button>
           </div>
         </div>

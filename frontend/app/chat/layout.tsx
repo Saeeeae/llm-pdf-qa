@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
-import { getDefaultRouteForUser, useAuthStore } from "@/lib/auth";
+import { type AuthUser, getDefaultRouteForUser, resetAuthState, useAuthStore } from "@/lib/auth";
+import { getStoredAccessToken } from "@/lib/auth-storage";
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
-  const { user, fetchMe, hasHydrated } = useAuthStore();
+  const { fetchMe, hasHydrated } = useAuthStore();
   const router = useRouter();
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [resolvedUser, setResolvedUser] = useState<AuthUser | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -16,12 +18,14 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
     const ensureAuth = async () => {
       if (!hasHydrated) return;
 
-      let currentUser = user;
-      if (!currentUser) {
-        await fetchMe();
-        currentUser = useAuthStore.getState().user;
+      const accessToken = getStoredAccessToken();
+      if (!accessToken) {
+        resetAuthState();
+        if (!cancelled) router.replace("/login");
+        return;
       }
 
+      const currentUser = await fetchMe();
       if (cancelled) return;
 
       if (!currentUser) {
@@ -29,11 +33,12 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
         return;
       }
 
-      if (currentUser.auth_level >= 100 && window.location.pathname === "/chat") {
+      if (currentUser.auth_level >= 100) {
         router.replace(getDefaultRouteForUser(currentUser));
         return;
       }
 
+      setResolvedUser(currentUser);
       setIsCheckingAuth(false);
     };
 
@@ -42,9 +47,9 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
     return () => {
       cancelled = true;
     };
-  }, [fetchMe, hasHydrated, router, user]);
+  }, [fetchMe, hasHydrated, router]);
 
-  if (!hasHydrated || isCheckingAuth || !user) {
+  if (!hasHydrated || isCheckingAuth || !resolvedUser) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-gray-400 text-sm">로딩 중...</div>

@@ -6,7 +6,7 @@
         up-gpu up-infra up-pipeline up-serving up-sync up-frontend \
         logs-pipeline logs-serving logs-sync logs-vllm logs-mineru \
         shell-pipeline shell-serving shell-sync shell-db \
-        db-psql db-reset init test lint
+        db-psql db-reset init test lint eval-phase3 check-endpoints
 
 # Default
 help: ## Show this help
@@ -131,6 +131,12 @@ test: ## Run tests
 
 lint: ## Run linter
 	python -m ruff check .
+
+eval-phase3: ## Run Phase 3 retrieval evaluation (requires admin auth env vars)
+	python scripts/eval_phase3.py --dataset eval/phase3_queries.sample.jsonl
+
+check-endpoints: ## Smoke-check auth/chat/admin endpoints (requires auth env vars)
+	python scripts/check_endpoints.py
 
 # ─── Cleanup ──────────────────────────────────────────────────────────────────
 

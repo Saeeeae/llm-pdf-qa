@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from collections import Counter
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -78,12 +79,20 @@ def _get_active_llm_config() -> LLMConfig:
     fallback = LLMConfig()
     fallback.model_name = serving_settings.vllm_model_name
     fallback.vllm_url = serving_settings.vllm_base_url
-    fallback.system_prompt = "당신은 사내 문서를 기반으로 답변하는 AI 어시스턴트입니다. 제공된 문서 내용을 바탕으로 정확하고 도움이 되는 답변을 제공하세요."
-    fallback.max_tokens = 4096
-    fallback.temperature = 0.7
-    fallback.top_p = 0.9
-    fallback.context_chunks = 5
+    fallback.system_prompt = serving_settings.fallback_system_prompt
+    fallback.max_tokens = serving_settings.fallback_max_tokens
+    fallback.temperature = serving_settings.fallback_temperature
+    fallback.top_p = serving_settings.fallback_top_p
+    fallback.context_chunks = serving_settings.fallback_context_chunks
     return fallback
+
+
+def _summarize_block_types(chunks: list[dict]) -> dict[str, int]:
+    counts = Counter(
+        str(chunk.get("block_type") or chunk.get("chunk_type") or "text")
+        for chunk in chunks
+    )
+    return dict(counts)
 
 
 @router.post("/sessions", response_model=SessionResponse)
@@ -186,6 +195,8 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
         assistant_msg_id = None
         token_count_out = 0
         start_time = time.time()
+        llm_first_token_ms = None
+        llm_stream_ms = 0
 
         try:
             # Embed query
@@ -193,6 +204,11 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
             embed_model = registry.embedding()
             query_vector = embed_model.encode(req.message).tolist()
             embed_ms = int((time.perf_counter() - embed_start) * 1000)
+            llm_config = _get_active_llm_config()
+            retrieval_limit = max(
+                llm_config.context_chunks * serving_settings.retrieval_context_expansion_factor,
+                serving_settings.retrieval_min_limit,
+            )
 
             # Hybrid search (dense + sparse with RRF)
             search_start = time.perf_counter()
@@ -203,12 +219,14 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 dept_id=user.dept_id,
                 accessible_folder_ids=accessible_folders,
                 search_scope=req.search_scope,
+                dense_limit=retrieval_limit,
+                sparse_limit=retrieval_limit,
+                final_limit=retrieval_limit,
             )
             search_ms = int((time.perf_counter() - search_start) * 1000)
 
             # Rerank
             rerank_start = time.perf_counter()
-            llm_config = _get_active_llm_config()
             reranked_chunks = rerank(req.message, context_chunks, top_k=llm_config.context_chunks)
             rerank_ms = int((time.perf_counter() - rerank_start) * 1000)
 
@@ -231,6 +249,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 web_ms = int((time.perf_counter() - web_start) * 1000)
 
             # Build messages with graph context and optional web results
+            build_start = time.perf_counter()
             llm_messages = build_messages(
                 system_prompt=llm_config.system_prompt or "",
                 context_chunks=reranked_chunks,
@@ -239,12 +258,14 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 user_message=req.message,
                 web_results=web_results if web_results else None,
             )
+            build_ms = int((time.perf_counter() - build_start) * 1000)
 
             # Estimate input tokens (rough: 1 token ~ 4 chars for mixed ko/en)
             input_text = json.dumps(llm_messages, ensure_ascii=False)
             token_count_in = len(input_text) // 4
 
             # Stream from vLLM
+            llm_start = time.perf_counter()
             for token in stream_response(
                 llm_messages,
                 vllm_url=llm_config.vllm_url,
@@ -253,9 +274,12 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                 temperature=llm_config.temperature,
                 top_p=llm_config.top_p,
             ):
+                if llm_first_token_ms is None:
+                    llm_first_token_ms = int((time.perf_counter() - llm_start) * 1000)
                 full_response += token
                 token_count_out += 1
                 yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            llm_stream_ms = int((time.perf_counter() - llm_start) * 1000)
 
             # Send references
             if reranked_chunks:
@@ -278,6 +302,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
 
             # Save messages and log
             latency_ms = int((time.time() - start_time) * 1000)
+            persist_start = time.perf_counter()
             with get_session() as db_session:
                 user_msg = ChatMessage(
                     session_id=session_id,
@@ -322,6 +347,8 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                             "block_id": c.get("block_id"),
                             "block_type": c.get("block_type") or c.get("chunk_type"),
                             "rrf_score": round(c.get("rrf_score", 0), 4),
+                            "final_score": round(c.get("final_score", 0), 4),
+                            "retrieval_intent": c.get("retrieval_intent"),
                         }
                         for c in context_chunks[:10]
                     ],
@@ -331,6 +358,10 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                             "block_id": c.get("block_id"),
                             "block_type": c.get("block_type") or c.get("chunk_type"),
                             "rerank_score": round(c.get("rerank_score", 0), 4),
+                            "rerank_model_norm": round(c.get("rerank_model_norm", 0), 4),
+                            "rerank_prior_norm": round(c.get("rerank_prior_norm", 0), 4),
+                            "rerank_feature_score": round(c.get("rerank_feature_score", 0), 4),
+                            "retrieval_intent": c.get("retrieval_intent"),
                         }
                         for c in reranked_chunks
                     ],
@@ -349,6 +380,7 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                     target_id=session_id,
                     description=req.message[:200],
                 ))
+            persist_ms = int((time.perf_counter() - persist_start) * 1000)
 
             # Event log with full timing breakdown
             elog.info("Chat query complete", user_id=user.user_id, session_id=session_id,
@@ -360,6 +392,9 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                           "has_graph_context": bool(graph_ctx),
                           "web_search_used": bool(web_results),
                           "web_results_count": len(web_results),
+                          "retrieval_intent": context_chunks[0].get("retrieval_intent", "general") if context_chunks else "general",
+                          "retrieved_block_types": _summarize_block_types(context_chunks),
+                          "reranked_block_types": _summarize_block_types(reranked_chunks),
                           "model": llm_config.model_name,
                           "token_in": token_count_in,
                           "token_out": token_count_out,
@@ -369,6 +404,10 @@ def stream_chat(session_id: int, req: ChatRequest, user: User = Depends(get_curr
                               "rerank_ms": rerank_ms,
                               "graph_ms": graph_ms,
                               "web_ms": web_ms,
+                              "build_ms": build_ms,
+                              "llm_first_token_ms": llm_first_token_ms,
+                              "llm_stream_ms": llm_stream_ms,
+                              "persist_ms": persist_ms,
                               "total_ms": latency_ms,
                           },
                       })

@@ -3,6 +3,7 @@ import logging
 from typing import Generator
 
 import httpx
+from rag_serving.config import serving_settings
 from shared.config import shared_settings
 
 logger = logging.getLogger(__name__)
@@ -45,8 +46,15 @@ def build_messages(system_prompt: str, context_chunks: list[dict], graph_context
 
 
 def stream_response(messages: list[dict], vllm_url: str, model_name: str,
-                    max_tokens: int = 4096, temperature: float = 0.7,
-                    top_p: float = 0.9) -> Generator[str, None, None]:
+                    max_tokens: int | None = None, temperature: float | None = None,
+                    top_p: float | None = None) -> Generator[str, None, None]:
+    if max_tokens is None:
+        max_tokens = serving_settings.fallback_max_tokens
+    if temperature is None:
+        temperature = serving_settings.fallback_temperature
+    if top_p is None:
+        top_p = serving_settings.fallback_top_p
+
     if shared_settings.smoke_test_mode or vllm_url.startswith("mock://"):
         user_message = next((msg["content"] for msg in reversed(messages) if msg.get("role") == "user"), "")
         system_context = messages[0]["content"] if messages else ""

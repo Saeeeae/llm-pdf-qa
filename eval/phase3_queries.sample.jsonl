@@ -1,0 +1,4 @@
+{"query":"최신 표 찾아줘","search_scope":"all","retrieve_k":24,"rerank_k":8,"expected_retrieval_intent":"table","expected_block_types":["table","caption"],"max_reranked_hit_rank":3,"match_mode":"any"}
+{"query":"슬라이드에서 milestone summary 찾아줘","search_scope":"all","retrieve_k":24,"rerank_k":8,"expected_retrieval_intent":"slide","expected_block_types":["text","caption"],"expected_text_substrings":["milestone","summary"],"max_reranked_hit_rank":5,"match_mode":"any"}
+{"query":"이미지나 차트 설명이 있는 페이지 찾아줘","search_scope":"all","retrieve_k":24,"rerank_k":8,"expected_retrieval_intent":"image","expected_block_types":["image","caption"],"expected_text_substrings":["chart","figure","이미지","차트"],"max_reranked_hit_rank":5,"match_mode":"any"}
+{"query":"최근 업데이트된 페이지에서 표 관련 내용 보여줘","search_scope":"all","retrieve_k":24,"rerank_k":8,"expected_retrieval_intent":"table","expected_block_types":["table","caption"],"max_reranked_hit_rank":5,"match_mode":"any"}
