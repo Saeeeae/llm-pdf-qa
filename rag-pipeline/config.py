@@ -26,6 +26,8 @@ class PipelineSettings(SharedSettings):
 
     # Graph
     graph_enable_canonicalization: bool = True
+    graph_llm_extraction: bool = False
+    graph_llm_batch_size: int = 4
 
     # API
     pipeline_api_port: int = 8001

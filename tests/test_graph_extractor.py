@@ -134,3 +134,42 @@ def test_canonicalize_no_alias():
     entities = [{"name": "Unknown Corp", "type": "ORG"}]
     result = canonicalize_entities(entities, {})
     assert result[0]["canonical_name"] == "Unknown Corp"
+
+
+def test_build_relationship_prompt():
+    from rag_pipeline.pipeline.graph_extractor import _build_relationship_prompt
+    entities = [{"name": "삼성전자", "type": "ORG"}, {"name": "HBM", "type": "TECH"}]
+    text = "삼성전자가 HBM 메모리를 생산합니다"
+    prompt = _build_relationship_prompt(text, entities)
+    assert "삼성전자" in prompt
+    assert "HBM" in prompt
+    assert "PRODUCES" in prompt
+
+
+def test_parse_relationship_response_valid():
+    from rag_pipeline.pipeline.graph_extractor import _parse_relationship_response
+    raw = '[{"subject": "삼성전자", "predicate": "PRODUCES", "object": "HBM"}]'
+    result = _parse_relationship_response(raw)
+    assert len(result) == 1
+    assert result[0]["predicate"] == "PRODUCES"
+
+
+def test_parse_relationship_response_invalid_predicate():
+    from rag_pipeline.pipeline.graph_extractor import _parse_relationship_response
+    raw = '[{"subject": "A", "predicate": "INVALID_PRED", "object": "B"}]'
+    result = _parse_relationship_response(raw)
+    assert len(result) == 0
+
+
+def test_parse_relationship_response_malformed():
+    from rag_pipeline.pipeline.graph_extractor import _parse_relationship_response
+    assert _parse_relationship_response("not json") == []
+    assert _parse_relationship_response("") == []
+
+
+def test_parse_relationship_response_with_surrounding_text():
+    from rag_pipeline.pipeline.graph_extractor import _parse_relationship_response
+    raw = 'Here are the results: [{"subject": "A", "predicate": "USES", "object": "B"}] done.'
+    result = _parse_relationship_response(raw)
+    assert len(result) == 1
+    assert result[0]["predicate"] == "USES"

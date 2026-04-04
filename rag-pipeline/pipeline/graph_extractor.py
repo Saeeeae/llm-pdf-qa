@@ -94,6 +94,96 @@ def canonicalize_entities(entities: list[dict], alias_map: dict[str, str]) -> li
     return entities
 
 
+VALID_PREDICATES = {
+    "PRODUCES", "ACQUIRES", "COMPETES_WITH", "REPORTS_TO",
+    "LOCATED_IN", "PART_OF", "USES", "SUPPLIES_TO", "PARTNERS_WITH",
+}
+
+
+def _build_relationship_prompt(text: str, entities: list[dict]) -> str:
+    entity_list = ", ".join(f"{e['name']}({e['type']})" for e in entities[:20])
+    return (
+        "주어진 텍스트에서 엔티티 간의 관계를 추출하세요.\n\n"
+        f"엔티티: {entity_list}\n\n"
+        f"텍스트: {text[:2000]}\n\n"
+        f"유효한 관계 유형: {', '.join(sorted(VALID_PREDICATES))}\n\n"
+        'JSON 배열로 응답하세요: [{"subject": "...", "predicate": "...", "object": "..."}]\n'
+        "관계가 없으면 빈 배열 []을 반환하세요."
+    )
+
+
+def _parse_relationship_response(raw: str) -> list[dict]:
+    import json
+    if not raw or not raw.strip():
+        return []
+    try:
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start < 0 or end <= start:
+            return []
+        data = json.loads(raw[start:end])
+    except (json.JSONDecodeError, ValueError):
+        return []
+    result = []
+    for item in data:
+        if (
+            isinstance(item, dict)
+            and item.get("subject")
+            and item.get("predicate") in VALID_PREDICATES
+            and item.get("object")
+        ):
+            result.append(item)
+    return result
+
+
+def extract_relationships_llm(doc_id: int, text: str, entities: list[dict]):
+    """Extract typed relationships between entities using LLM (opt-in)."""
+    if not entities or len(entities) < 2:
+        return
+
+    import httpx
+    from shared.config import shared_settings
+
+    prompt = _build_relationship_prompt(text, entities)
+
+    try:
+        response = httpx.post(
+            f"{shared_settings.vllm_base_url}/v1/chat/completions",
+            json={
+                "model": shared_settings.vllm_model_name,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 1024,
+                "temperature": 0.1,
+            },
+            timeout=60.0,
+        )
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.warning("LLM relationship extraction failed: %s", e)
+        return
+
+    relationships = _parse_relationship_response(raw)
+    if not relationships:
+        return
+
+    try:
+        driver = get_neo4j_driver()
+        with driver.session() as neo_session:
+            for rel in relationships:
+                neo_session.run(
+                    "MATCH (a:Entity {name: $subject}), (b:Entity {name: $object}) "
+                    "MERGE (a)-[r:RELATES {type: $predicate}]->(b) "
+                    "ON CREATE SET r.weight = 1 "
+                    "ON MATCH SET r.weight = r.weight + 1",
+                    subject=rel["subject"], object=rel["object"], predicate=rel["predicate"],
+                )
+        driver.close()
+        logger.info("Stored %d typed relationships for doc_id=%d", len(relationships), doc_id)
+    except Exception as e:
+        logger.warning("Neo4j relationship storage failed (non-fatal): %s", e)
+
+
 def _strip_noise(text: str) -> str:
     """Collapse excessive whitespace for cleaner matching."""
     return re.sub(r"\s+", " ", text).strip()
