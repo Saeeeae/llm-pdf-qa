@@ -86,3 +86,41 @@ def get_graph_context(query: str, max_hops: int = 2) -> str:
     except Exception as e:
         logger.warning("Graph retrieval failed (non-fatal): %s", e)
         return ""
+
+
+def get_graph_entity_set(query: str, max_entities: int = 20) -> set[str]:
+    """Return canonical entity names related to query (1-hop) as a set."""
+    with get_session() as db_session:
+        alias_rows = get_alias_rows(db_session)
+
+    keywords = list(dict.fromkeys(expand_terms(extract_candidate_terms(query) + [query], alias_rows)))[:8]
+    if not keywords:
+        return set()
+
+    try:
+        driver = _get_driver()
+        entity_names: set[str] = set()
+        with driver.session() as session:
+            result = session.run(
+                """
+                MATCH (e:Entity)
+                WHERE any(kw IN $keywords WHERE e.name CONTAINS kw)
+                WITH DISTINCT e
+                LIMIT $limit
+                OPTIONAL MATCH (e)-[r]-(neighbor:Entity)
+                WHERE neighbor <> e
+                WITH collect(DISTINCT e.name) + collect(DISTINCT neighbor.name) AS all_names
+                UNWIND all_names AS name
+                RETURN DISTINCT name
+                LIMIT $limit
+                """,
+                keywords=keywords[:5],
+                limit=max_entities,
+            )
+            for record in result:
+                if record["name"]:
+                    entity_names.add(record["name"])
+        return entity_names
+    except Exception as e:
+        logger.warning("Graph entity set retrieval failed (non-fatal): %s", e)
+        return set()

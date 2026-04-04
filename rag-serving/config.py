@@ -38,6 +38,7 @@ class ServingSettings(SharedSettings):
     rerank_weights_factoid: str = "0.65,0.20,0.15"
     rerank_weights_analytical: str = "0.45,0.30,0.25"
     rerank_weights_comparison: str = "0.50,0.25,0.25"
+    rerank_graph_boost_enabled: bool = True
     retrieval_budget_general: str = ""
     retrieval_budget_table: str = "table:8,caption:4,text:8"
     retrieval_budget_image: str = "image:8,caption:6,text:6"

@@ -67,7 +67,7 @@ def _format_rerank_text(chunk: dict) -> str:
     return f"{header}\n{chunk['content'][:512]}"
 
 
-def _compute_feature_score(query: str, chunk: dict, *, hints: dict[str, bool], query_terms: list[str]) -> float:
+def _compute_feature_score(query: str, chunk: dict, *, hints: dict[str, bool], query_terms: list[str], graph_entities: set[str] | None = None) -> float:
     normalized_query = normalize_search_text(query)
     block_type = _normalize_block_type(chunk)
     intent = str(chunk.get("retrieval_intent") or "general")
@@ -147,6 +147,12 @@ def _compute_feature_score(query: str, chunk: dict, *, hints: dict[str, bool], q
         score += min(float(chunk.get("freshness_boost") or 0.0), 0.04)
 
     score += min(float(chunk.get("multi_signal_boost") or 0.0) * 2.0, 0.08)
+
+    if graph_entities:
+        content_lower = content.lower()
+        graph_hits = sum(1 for ent in graph_entities if ent.lower() in content_lower)
+        score += min(graph_hits * 0.08, 0.16)
+
     return round(min(score, 1.0), 4)
 
 
@@ -218,6 +224,14 @@ def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     ]
     query_terms = list(dict.fromkeys(query_terms))
 
+    graph_entities: set[str] | None = None
+    if serving_settings.rerank_graph_boost_enabled:
+        try:
+            from rag_serving.api.rag.graph_retriever import get_graph_entity_set
+            graph_entities = get_graph_entity_set(query) or None
+        except Exception:
+            pass
+
     query_type = _classify_query_type(query)
     weight_map = {
         "factoid": serving_settings.rerank_weights_factoid,
@@ -238,7 +252,7 @@ def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
         model_norm_scores,
         prior_norm_scores,
     ):
-        feature_score = _compute_feature_score(query, chunk, hints=hints, query_terms=query_terms)
+        feature_score = _compute_feature_score(query, chunk, hints=hints, query_terms=query_terms, graph_entities=graph_entities)
         combined_score = (
             model_norm * w_model
             + prior_norm * w_prior

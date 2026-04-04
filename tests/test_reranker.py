@@ -161,3 +161,14 @@ def test_calibrate_scores_sigmoid():
 def test_calibrate_scores_empty():
     from rag_serving.api.rag.reranker import _calibrate_scores
     assert _calibrate_scores([]) == []
+
+
+def test_graph_entity_boost():
+    chunk = _make_chunk(content="삼성전자가 HBM을 생산합니다")
+    hints = {"table": False, "image": False, "slide": False, "page": False, "recency": False}
+    score_without = _compute_feature_score("HBM 생산", chunk, hints=hints, query_terms=["HBM", "생산"])
+    score_with = _compute_feature_score(
+        "HBM 생산", chunk, hints=hints, query_terms=["HBM", "생산"],
+        graph_entities={"삼성전자", "HBM"},
+    )
+    assert score_with > score_without
