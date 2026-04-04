@@ -127,3 +127,37 @@ def test_mmr_promotes_diversity():
     result = rerank("revenue analysis", chunks, top_k=3)
     doc_ids = [c["doc_id"] for c in result]
     assert len(set(doc_ids)) >= 2, f"Expected diversity, got doc_ids={doc_ids}"
+
+
+def test_classify_query_type_factoid():
+    from rag_serving.api.rag.reranker import _classify_query_type
+    assert _classify_query_type("CEO는 누구인가요?") == "factoid"
+    assert _classify_query_type("What is the revenue?") == "factoid"
+
+
+def test_classify_query_type_analytical():
+    from rag_serving.api.rag.reranker import _classify_query_type
+    assert _classify_query_type("시장 전망을 분석해줘") == "analytical"
+
+
+def test_classify_query_type_comparison():
+    from rag_serving.api.rag.reranker import _classify_query_type
+    assert _classify_query_type("삼성과 LG를 비교해줘") == "comparison"
+
+
+def test_classify_query_type_general():
+    from rag_serving.api.rag.reranker import _classify_query_type
+    assert _classify_query_type("안녕하세요") == "general"
+
+
+def test_calibrate_scores_sigmoid():
+    from rag_serving.api.rag.reranker import _calibrate_scores
+    result = _calibrate_scores([0.0, 5.0, -5.0])
+    assert 0.49 < result[0] < 0.51  # sigmoid(0) ≈ 0.5
+    assert result[1] > 0.99         # sigmoid(5) ≈ 0.993
+    assert result[2] < 0.01         # sigmoid(-5) ≈ 0.007
+
+
+def test_calibrate_scores_empty():
+    from rag_serving.api.rag.reranker import _calibrate_scores
+    assert _calibrate_scores([]) == []

@@ -1,4 +1,5 @@
 import logging
+import math
 
 from rag_serving.config import serving_settings
 from shared.models.registry import registry
@@ -36,6 +37,13 @@ def _normalize_scores(values: list[float]) -> list[float]:
     if maximum - minimum < 1e-9:
         return [0.5 for _ in values]
     return [(value - minimum) / (maximum - minimum) for value in values]
+
+
+def _calibrate_scores(values: list[float]) -> list[float]:
+    """Sigmoid calibration for stable [0,1] score distribution."""
+    if not values:
+        return []
+    return [1.0 / (1.0 + math.exp(-v)) for v in values]
 
 
 def _format_rerank_text(chunk: dict) -> str:
@@ -176,6 +184,22 @@ def _apply_mmr(chunks: list[dict], top_k: int, mmr_lambda: float) -> list[dict]:
     return selected
 
 
+_FACTOID_KW = {"누구", "무엇", "언제", "어디", "몇", "what", "who", "when", "where", "how many", "how much"}
+_ANALYTICAL_KW = {"분석", "전망", "이유", "원인", "영향", "추세", "analyze", "why", "impact", "trend", "forecast"}
+_COMPARISON_KW = {"비교", "차이", "대비", "versus", "compare", "vs", "difference", "대조"}
+
+
+def _classify_query_type(query: str) -> str:
+    normalized = normalize_search_text(query)
+    if any(kw in normalized for kw in _COMPARISON_KW):
+        return "comparison"
+    if any(kw in normalized for kw in _ANALYTICAL_KW):
+        return "analytical"
+    if any(kw in normalized for kw in _FACTOID_KW):
+        return "factoid"
+    return "general"
+
+
 def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     if not chunks:
         return []
@@ -183,7 +207,7 @@ def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     model = registry.reranker()
     pairs = [(query, _format_rerank_text(c)) for c in chunks]
     model_scores = [float(score) for score in model.predict(pairs)]
-    model_norm_scores = _normalize_scores(model_scores)
+    model_norm_scores = _calibrate_scores(model_scores)
     prior_scores = [float(chunk.get("final_score") or chunk.get("rrf_score") or 0.0) for chunk in chunks]
     prior_norm_scores = _normalize_scores(prior_scores)
     hints = _query_hints(query)
@@ -194,6 +218,20 @@ def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     ]
     query_terms = list(dict.fromkeys(query_terms))
 
+    query_type = _classify_query_type(query)
+    weight_map = {
+        "factoid": serving_settings.rerank_weights_factoid,
+        "analytical": serving_settings.rerank_weights_analytical,
+        "comparison": serving_settings.rerank_weights_comparison,
+    }
+    if query_type in weight_map:
+        parts = weight_map[query_type].split(",")
+        w_model, w_prior, w_feature = float(parts[0]), float(parts[1]), float(parts[2])
+    else:
+        w_model = serving_settings.rerank_model_weight
+        w_prior = serving_settings.rerank_prior_weight
+        w_feature = serving_settings.rerank_feature_weight
+
     for chunk, model_score, model_norm, prior_norm in zip(
         chunks,
         model_scores,
@@ -202,9 +240,9 @@ def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     ):
         feature_score = _compute_feature_score(query, chunk, hints=hints, query_terms=query_terms)
         combined_score = (
-            model_norm * serving_settings.rerank_model_weight
-            + prior_norm * serving_settings.rerank_prior_weight
-            + feature_score * serving_settings.rerank_feature_weight
+            model_norm * w_model
+            + prior_norm * w_prior
+            + feature_score * w_feature
         )
         chunk["rerank_model_score"] = round(model_score, 4)
         chunk["rerank_model_norm"] = round(model_norm, 4)
