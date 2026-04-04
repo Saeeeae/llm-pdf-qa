@@ -45,8 +45,13 @@ def token_length(text: str) -> int:
         stripped = text.strip()
         if not stripped:
             return 0
-        # Mixed ko/en approximation for smoke/dev mode.
-        return max(1, len(stripped) // 4)
+        # Language-aware approximation for smoke/dev mode.
+        # Korean syllable blocks (가-힣) ≈ 1 token each in bge-m3.
+        # Non-Korean words ≈ 1.3 tokens each (subword splitting).
+        korean_chars = len(re.findall(r"[가-힣]", stripped))
+        non_korean = re.sub(r"[가-힣]", " ", stripped).split()
+        non_korean_tokens = int(len(non_korean) * 1.3)
+        return max(1, korean_chars + non_korean_tokens)
     return len(tokenizer.encode(text, add_special_tokens=False))
 
 
