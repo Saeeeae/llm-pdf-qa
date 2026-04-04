@@ -18,6 +18,7 @@ class PipelineSettings(SharedSettings):
     chunk_table_header_propagation: bool = True
     chunk_enable_parent_child: bool = True
     chunk_parent_size: int = 1536
+    chunk_contextual_prefix: bool = True
 
     # Image
     enable_image_embedding: bool = True

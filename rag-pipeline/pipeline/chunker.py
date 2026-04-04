@@ -271,6 +271,7 @@ def chunk_parse_blocks(
     blocks: list["ParseBlock"],
     chunk_size: int | None = None,
     chunk_overlap: int | None = None,
+    doc_context: str | None = None,
 ) -> list[dict]:
     """Chunk parser blocks while preserving multimodal metadata."""
     if not blocks:
@@ -340,6 +341,15 @@ def chunk_parse_blocks(
             if parent_chunk_idx is not None:
                 item["parent_chunk_idx"] = parent_chunk_idx
                 item["is_parent"] = False
+            if doc_context and pipeline_settings.chunk_contextual_prefix:
+                section = block.section_path or ""
+                prefix_parts = [f"[문서: {doc_context}"]
+                if section:
+                    prefix_parts.append(f"섹션: {section}")
+                prefix = " | ".join(prefix_parts) + "]\n"
+                item["display_text"] = item["text"]
+                item["text"] = prefix + item["text"]
+                item["token_cnt"] = token_length(item["text"])
             items.append(item)
             chunk_idx += 1
 
