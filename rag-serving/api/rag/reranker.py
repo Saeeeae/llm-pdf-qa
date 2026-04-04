@@ -142,6 +142,40 @@ def _compute_feature_score(query: str, chunk: dict, *, hints: dict[str, bool], q
     return round(min(score, 1.0), 4)
 
 
+def _apply_mmr(chunks: list[dict], top_k: int, mmr_lambda: float) -> list[dict]:
+    """Greedy MMR selection using metadata-based diversity penalty."""
+    if not chunks or mmr_lambda >= 1.0:
+        return chunks[:top_k]
+
+    selected: list[dict] = []
+    remaining = list(chunks)
+
+    selected.append(remaining.pop(0))
+
+    while len(selected) < top_k and remaining:
+        best_idx = 0
+        best_mmr = -float("inf")
+
+        selected_doc_ids = {c["doc_id"] for c in selected}
+        selected_sections = {c.get("section_path") or "" for c in selected}
+
+        for i, candidate in enumerate(remaining):
+            relevance = candidate["rerank_score"]
+            penalty = 0.0
+            if candidate["doc_id"] in selected_doc_ids:
+                penalty += 0.3
+            if (candidate.get("section_path") or "") in selected_sections and candidate.get("section_path"):
+                penalty += 0.15
+            mmr_score = mmr_lambda * relevance - (1 - mmr_lambda) * penalty
+            if mmr_score > best_mmr:
+                best_mmr = mmr_score
+                best_idx = i
+
+        selected.append(remaining.pop(best_idx))
+
+    return selected
+
+
 def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
     if not chunks:
         return []
@@ -179,4 +213,6 @@ def rerank(query: str, chunks: list[dict], top_k: int = 5) -> list[dict]:
         chunk["rerank_score"] = round(combined_score, 4)
 
     ranked = sorted(chunks, key=lambda x: x["rerank_score"], reverse=True)
+    if serving_settings.rerank_mmr_enabled:
+        return _apply_mmr(ranked, top_k, serving_settings.rerank_mmr_lambda)
     return ranked[:top_k]

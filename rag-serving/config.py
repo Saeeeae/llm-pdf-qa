@@ -33,6 +33,8 @@ class ServingSettings(SharedSettings):
     rerank_model_weight: float = 0.55
     rerank_prior_weight: float = 0.30
     rerank_feature_weight: float = 0.15
+    rerank_mmr_enabled: bool = True
+    rerank_mmr_lambda: float = 0.7
     retrieval_budget_general: str = ""
     retrieval_budget_table: str = "table:8,caption:4,text:8"
     retrieval_budget_image: str = "image:8,caption:6,text:6"

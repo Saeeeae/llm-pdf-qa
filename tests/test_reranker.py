@@ -113,3 +113,17 @@ def test_rerank_preserves_score_fields():
     assert "rerank_feature_score" in result[0]
     assert "rerank_model_norm" in result[0]
     assert "rerank_prior_norm" in result[0]
+
+
+def test_mmr_promotes_diversity():
+    """Chunks from different docs should be promoted over same-doc clusters."""
+    chunks = [
+        _make_chunk(content="revenue Q1", doc_id=1, chunk_id=1, rrf_score=0.9, final_score=0.9),
+        _make_chunk(content="revenue Q2", doc_id=1, chunk_id=2, rrf_score=0.88, final_score=0.88),
+        _make_chunk(content="revenue Q3", doc_id=1, chunk_id=3, rrf_score=0.86, final_score=0.86),
+        _make_chunk(content="competitor analysis", doc_id=2, chunk_id=4, rrf_score=0.85, final_score=0.85),
+        _make_chunk(content="market overview", doc_id=3, chunk_id=5, rrf_score=0.80, final_score=0.80),
+    ]
+    result = rerank("revenue analysis", chunks, top_k=3)
+    doc_ids = [c["doc_id"] for c in result]
+    assert len(set(doc_ids)) >= 2, f"Expected diversity, got doc_ids={doc_ids}"
