@@ -4,6 +4,7 @@ from neo4j import GraphDatabase
 from shared.config import shared_settings
 from shared.db import get_session
 from shared.models.orm import GraphEntity
+from rag_pipeline.config import pipeline_settings
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,16 @@ def _compute_cooccurrence_pairs(entities: list[dict]) -> list[tuple[str, str]]:
     """Return sorted entity name pairs for co-occurrence edges."""
     names = sorted(set(e["name"].strip() for e in entities))
     return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
+
+
+def canonicalize_entities(entities: list[dict], alias_map: dict[str, str]) -> list[dict]:
+    """Resolve entity surface forms to canonical names via alias lookup."""
+    for ent in entities:
+        name = ent["name"].strip()
+        normalized = name.lower().strip()
+        canonical = alias_map.get(normalized) or alias_map.get(name) or name
+        ent["canonical_name"] = canonical
+    return entities
 
 
 def _strip_noise(text: str) -> str:
@@ -164,6 +175,13 @@ def store_entities(doc_id: int, entities: list[dict]):
     if not entities:
         return
 
+    if pipeline_settings.graph_enable_canonicalization:
+        from shared.search_terms import get_alias_rows
+        with get_session() as db_session:
+            alias_rows = get_alias_rows(db_session)
+        alias_map = {row.normalized_alias: row.canonical_name for row in alias_rows}
+        entities = canonicalize_entities(entities, alias_map)
+
     with get_session() as session:
         session.query(GraphEntity).filter(GraphEntity.doc_id == doc_id).delete()
         for ent in entities:
@@ -171,25 +189,32 @@ def store_entities(doc_id: int, entities: list[dict]):
                 doc_id=doc_id,
                 entity_name=ent["name"],
                 entity_type=ent["type"],
+                canonical_name=ent.get("canonical_name"),
             ))
 
     try:
         driver = get_neo4j_driver()
         with driver.session() as neo_session:
             for ent in entities:
+                entity_key = ent.get("canonical_name") or ent["name"]
                 result = neo_session.run(
-                    "MERGE (e:Entity {name: $name}) SET e.type = $type RETURN elementId(e) AS node_id",
-                    name=ent["name"], type=ent["type"],
+                    "MERGE (e:Entity {name: $name}) "
+                    "SET e.type = $type, e.surface_forms = "
+                    "CASE WHEN $surface IN coalesce(e.surface_forms, []) THEN e.surface_forms "
+                    "ELSE coalesce(e.surface_forms, []) + [$surface] END "
+                    "RETURN elementId(e) AS node_id",
+                    name=entity_key, type=ent["type"], surface=ent["name"],
                 )
                 record = result.single()
                 if record:
                     ent["neo4j_node_id"] = record["node_id"]
             for ent in entities:
+                entity_key = ent.get("canonical_name") or ent["name"]
                 neo_session.run(
                     "MATCH (e:Entity {name: $name}) "
                     "MERGE (d:Document {doc_id: $doc_id}) "
                     "MERGE (e)-[:APPEARS_IN]->(d)",
-                    name=ent["name"], doc_id=doc_id,
+                    name=entity_key, doc_id=doc_id,
                 )
             if len(entities) > 1:
                 pairs = _compute_cooccurrence_pairs(entities)

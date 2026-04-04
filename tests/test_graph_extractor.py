@@ -115,3 +115,22 @@ def test_compute_cooccurrence_pairs_single():
 def test_compute_cooccurrence_pairs_empty():
     from rag_pipeline.pipeline.graph_extractor import _compute_cooccurrence_pairs
     assert _compute_cooccurrence_pairs([]) == []
+
+
+def test_canonicalize_entities():
+    from rag_pipeline.pipeline.graph_extractor import canonicalize_entities
+    entities = [
+        {"name": "삼성전자주식회사", "type": "ORG"},
+        {"name": "Samsung", "type": "ORG"},
+    ]
+    alias_map = {"삼성전자주식회사": "삼성전자", "samsung": "삼성전자"}
+    result = canonicalize_entities(entities, alias_map)
+    assert result[0]["canonical_name"] == "삼성전자"
+    assert result[1]["canonical_name"] == "삼성전자"
+
+
+def test_canonicalize_no_alias():
+    from rag_pipeline.pipeline.graph_extractor import canonicalize_entities
+    entities = [{"name": "Unknown Corp", "type": "ORG"}]
+    result = canonicalize_entities(entities, {})
+    assert result[0]["canonical_name"] == "Unknown Corp"
