@@ -431,6 +431,23 @@ def apply_block_type_budgets(results: list[dict], budgets: dict[str, int], limit
     return selected[:limit]
 
 
+def _expand_with_parents(chunks: list[dict], parent_map: dict[int, dict]) -> list[dict]:
+    """Replace child chunks with their parent chunks for broader context."""
+    seen_parents: set[int] = set()
+    result = []
+    for chunk in chunks:
+        parent_id = chunk.get("parent_chunk_id")
+        if parent_id and parent_id in parent_map and parent_id not in seen_parents:
+            parent = dict(parent_map[parent_id])
+            parent["expanded_from_child"] = chunk.get("chunk_id")
+            parent["rerank_score"] = chunk.get("rerank_score", 0)
+            result.append(parent)
+            seen_parents.add(parent_id)
+        elif not parent_id or parent_id not in parent_map:
+            result.append(chunk)
+    return result
+
+
 def hybrid_search(query_text: str, query_vector: list[float],
                   dept_id: int, accessible_folder_ids: list[int],
                   search_scope: str = "all", dense_limit: int = 20,
