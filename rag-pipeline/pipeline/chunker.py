@@ -289,30 +289,58 @@ def chunk_parse_blocks(
 
         if token_length(text) <= chunk_size:
             parts = [text]
+            is_large_block = False
         elif block.block_type == "table" and pipeline_settings.chunk_table_header_propagation:
             parts = _split_table_with_headers(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            is_large_block = len(parts) > 1
         else:
             parts = _split_by_tokens(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            is_large_block = len(parts) > 1
+
+        # Emit parent chunk for large blocks (parent-child strategy)
+        parent_chunk_idx = None
+        if (
+            is_large_block
+            and pipeline_settings.chunk_enable_parent_child
+            and token_length(text) <= pipeline_settings.chunk_parent_size
+        ):
+            items.append({
+                "text": text,
+                "token_cnt": token_length(text),
+                "chunk_idx": chunk_idx,
+                "chunk_type": block.block_type,
+                "is_parent": True,
+                "page_number": block.page_number,
+                "sheet_name": block.sheet_name,
+                "slide_number": block.slide_number,
+                "section_path": block.section_path,
+                "language": block.language,
+                "block_idx": block_idx,
+            })
+            parent_chunk_idx = chunk_idx
+            chunk_idx += 1
 
         for part in parts:
             content = part.strip()
             if not content:
                 continue
 
-            items.append(
-                {
-                    "text": content,
-                    "token_cnt": token_length(content),
-                    "chunk_idx": chunk_idx,
-                    "chunk_type": block.block_type,
-                    "page_number": block.page_number,
-                    "sheet_name": block.sheet_name,
-                    "slide_number": block.slide_number,
-                    "section_path": block.section_path,
-                    "language": block.language,
-                    "block_idx": block_idx,
-                }
-            )
+            item = {
+                "text": content,
+                "token_cnt": token_length(content),
+                "chunk_idx": chunk_idx,
+                "chunk_type": block.block_type,
+                "page_number": block.page_number,
+                "sheet_name": block.sheet_name,
+                "slide_number": block.slide_number,
+                "section_path": block.section_path,
+                "language": block.language,
+                "block_idx": block_idx,
+            }
+            if parent_chunk_idx is not None:
+                item["parent_chunk_idx"] = parent_chunk_idx
+                item["is_parent"] = False
+            items.append(item)
             chunk_idx += 1
 
     return items

@@ -81,6 +81,8 @@ def _ensure_app_schema(engine) -> None:
         """,
         "CREATE INDEX IF NOT EXISTS idx_doc_keyword_norm ON doc_keyword(normalized_keyword)",
         "CREATE INDEX IF NOT EXISTS idx_doc_keyword_doc ON doc_keyword(doc_id, chunk_id)",
+        "ALTER TABLE graph_entities ADD COLUMN IF NOT EXISTS canonical_name TEXT",
+        "ALTER TABLE doc_chunk ADD COLUMN IF NOT EXISTS parent_chunk_id INTEGER REFERENCES doc_chunk(chunk_id) ON DELETE SET NULL",
         """
         DO $$
         BEGIN

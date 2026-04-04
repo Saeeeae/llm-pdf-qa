@@ -245,6 +245,7 @@ class DocChunk(Base):
     embed_model = Column(String(100), default="BAAI/bge-m3")
     chunk_type = Column(String(20), default="text")
     image_id = Column(Integer, ForeignKey("doc_image.image_id", ondelete="SET NULL"))
+    parent_chunk_id = Column(Integer, ForeignKey("doc_chunk.chunk_id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -261,6 +262,7 @@ class GraphEntity(Base):
     entity_name = Column(Text, nullable=False)
     entity_type = Column(String(50))
     neo4j_node_id = Column(Text)
+    canonical_name = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

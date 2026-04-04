@@ -16,10 +16,15 @@ class PipelineSettings(SharedSettings):
     chunk_overlap: int = 50
     chunk_min_section_tokens: int = 80
     chunk_table_header_propagation: bool = True
+    chunk_enable_parent_child: bool = True
+    chunk_parent_size: int = 1536
 
     # Image
     enable_image_embedding: bool = True
     image_store_dir: str = "/data/images"
+
+    # Graph
+    graph_enable_canonicalization: bool = True
 
     # API
     pipeline_api_port: int = 8001
