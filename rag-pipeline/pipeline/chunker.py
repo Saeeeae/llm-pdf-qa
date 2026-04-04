@@ -160,7 +160,12 @@ def _split_by_tokens(text: str, chunk_size: int, chunk_overlap: int) -> list[str
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         length_function=token_length,
-        separators=["\n\n", "\n", ". ", "? ", "! ", "; ", ", ", " ", ""],
+        separators=[
+            "\n\n", "\n",
+            "습니다. ", "됩니다. ", "입니다. ", "했다. ", "된다. ", "한다. ",
+            "다. ", "요. ",
+            ". ", "? ", "! ", "; ", ", ", " ", "",
+        ],
     )
     return splitter.split_text(text)
 
@@ -214,6 +219,54 @@ def chunk_text(
     ]
 
 
+_TABLE_SEPARATOR_RE = re.compile(r"^\s*\|[\s\-:|]+\|\s*$")
+
+
+def _extract_table_header(text: str) -> tuple[str, str]:
+    """Return (header_block, remaining_rows) from a markdown table."""
+    lines = text.strip().split("\n")
+    if len(lines) < 3 or not TABLE_RE.match(lines[0]):
+        return "", text
+    if _TABLE_SEPARATOR_RE.match(lines[1]):
+        header_block = lines[0] + "\n" + lines[1]
+        remaining = "\n".join(lines[2:])
+    else:
+        header_block = lines[0]
+        remaining = "\n".join(lines[1:])
+    return header_block, remaining
+
+
+def _split_table_with_headers(
+    text: str, chunk_size: int, chunk_overlap: int
+) -> list[str]:
+    """Split a markdown table, prepending header to each continuation chunk."""
+    header_block, remaining = _extract_table_header(text)
+    if not header_block or not remaining.strip():
+        return [text]
+
+    header_tokens = token_length(header_block)
+    body_budget = max(chunk_size - header_tokens - 1, chunk_size // 2)
+
+    rows = remaining.strip().split("\n")
+    parts: list[str] = []
+    current_rows: list[str] = []
+    current_tokens = 0
+
+    for row in rows:
+        row_tokens = token_length(row)
+        if current_rows and current_tokens + row_tokens > body_budget:
+            parts.append(header_block + "\n" + "\n".join(current_rows))
+            current_rows = []
+            current_tokens = 0
+        current_rows.append(row)
+        current_tokens += row_tokens
+
+    if current_rows:
+        parts.append(header_block + "\n" + "\n".join(current_rows))
+
+    return parts if parts else [text]
+
+
 def chunk_parse_blocks(
     blocks: list["ParseBlock"],
     chunk_size: int | None = None,
@@ -236,6 +289,8 @@ def chunk_parse_blocks(
 
         if token_length(text) <= chunk_size:
             parts = [text]
+        elif block.block_type == "table" and pipeline_settings.chunk_table_header_propagation:
+            parts = _split_table_with_headers(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         else:
             parts = _split_by_tokens(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 

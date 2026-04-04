@@ -15,6 +15,7 @@ class PipelineSettings(SharedSettings):
     chunk_size: int = 512
     chunk_overlap: int = 50
     chunk_min_section_tokens: int = 80
+    chunk_table_header_propagation: bool = True
 
     # Image
     enable_image_embedding: bool = True
