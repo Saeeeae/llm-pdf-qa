@@ -88,3 +88,30 @@ def test_entity_has_required_fields():
         assert "start_char" in ent
         assert "end_char" in ent
         assert ent["type"] in {"ORG", "PERSON", "DATE", "TECH"}
+
+
+def test_compute_cooccurrence_pairs():
+    from rag_pipeline.pipeline.graph_extractor import _compute_cooccurrence_pairs
+    entities = [
+        {"name": "A", "type": "ORG"},
+        {"name": "B", "type": "TECH"},
+        {"name": "C", "type": "PERSON"},
+    ]
+    pairs = _compute_cooccurrence_pairs(entities)
+    assert ("A", "B") in pairs
+    assert ("A", "C") in pairs
+    assert ("B", "C") in pairs
+    assert len(pairs) == 3
+    for a, b in pairs:
+        assert a < b
+
+
+def test_compute_cooccurrence_pairs_single():
+    from rag_pipeline.pipeline.graph_extractor import _compute_cooccurrence_pairs
+    entities = [{"name": "Only", "type": "ORG"}]
+    assert _compute_cooccurrence_pairs(entities) == []
+
+
+def test_compute_cooccurrence_pairs_empty():
+    from rag_pipeline.pipeline.graph_extractor import _compute_cooccurrence_pairs
+    assert _compute_cooccurrence_pairs([]) == []

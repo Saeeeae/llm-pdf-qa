@@ -77,6 +77,12 @@ def _deduplicate(entities: list[dict]) -> list[dict]:
     return result
 
 
+def _compute_cooccurrence_pairs(entities: list[dict]) -> list[tuple[str, str]]:
+    """Return sorted entity name pairs for co-occurrence edges."""
+    names = sorted(set(e["name"].strip() for e in entities))
+    return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]]
+
+
 def _strip_noise(text: str) -> str:
     """Collapse excessive whitespace for cleaner matching."""
     return re.sub(r"\s+", " ", text).strip()
@@ -186,14 +192,15 @@ def store_entities(doc_id: int, entities: list[dict]):
                     name=ent["name"], doc_id=doc_id,
                 )
             if len(entities) > 1:
-                names = [e["name"] for e in entities]
-                neo_session.run(
-                    "UNWIND $names AS n1 UNWIND $names AS n2 "
-                    "WITH n1, n2 WHERE n1 < n2 "
-                    "MATCH (a:Entity {name: n1}), (b:Entity {name: n2}) "
-                    "MERGE (a)-[:CO_OCCURS]->(b)",
-                    names=names,
-                )
+                pairs = _compute_cooccurrence_pairs(entities)
+                for name_a, name_b in pairs:
+                    neo_session.run(
+                        "MATCH (a:Entity {name: $a}), (b:Entity {name: $b}) "
+                        "MERGE (a)-[r:CO_OCCURS]->(b) "
+                        "ON CREATE SET r.weight = 1, r.doc_count = 1 "
+                        "ON MATCH SET r.weight = r.weight + 1, r.doc_count = r.doc_count + 1",
+                        a=name_a, b=name_b,
+                    )
         driver.close()
     except Exception as e:
         logger.warning("Neo4j storage failed (non-fatal): %s", e)

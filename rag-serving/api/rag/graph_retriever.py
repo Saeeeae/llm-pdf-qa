@@ -60,11 +60,14 @@ def get_graph_context(query: str, max_hops: int = 2) -> str:
                 WHERE any(kw IN $keywords WHERE e.name CONTAINS kw)
                 WITH DISTINCT e
                 LIMIT $entity_limit
-                OPTIONAL MATCH (e)-[*1..{hop_span}]-(neighbor:Entity)
+                OPTIONAL MATCH (e)-[r]-(neighbor:Entity)
                 WHERE neighbor <> e
+                WITH e, neighbor, coalesce(r.weight, 0) AS w
+                ORDER BY w DESC
+                WITH e, collect(DISTINCT neighbor.name)[..{neighbor_limit}] AS neighbors
                 RETURN e.name AS entity,
                        e.type AS type,
-                       collect(DISTINCT neighbor.name) AS neighbors
+                       neighbors
                 LIMIT $entity_limit
                 """,
                 keywords=keywords[:5],
