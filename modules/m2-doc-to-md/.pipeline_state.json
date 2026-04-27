@@ -1,0 +1,12 @@
+{
+  "files": {
+    "phase0-smoke.docx": {
+      "hash": "80c38a1a5096228f68c65314b5762d19022e4468e7e99d4cccd52c907907534d",
+      "mtime": 1773756660.0690868,
+      "status": "ok",
+      "md_path": "phase0-smoke.md"
+    }
+  },
+  "last_run": "2026-04-25T20:37:28.691471",
+  "last_mode": "incremental"
+}

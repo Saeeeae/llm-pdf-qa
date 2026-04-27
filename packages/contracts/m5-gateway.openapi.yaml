@@ -1,0 +1,124 @@
+openapi: "3.1.0"
+info:
+  title: M5 API Gateway
+  version: "1.0.0"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      responses:
+        "200": {description: OK}
+  /ready:
+    get:
+      summary: Readiness — polls M1/M4 (critical) and M2/M3/M7 (optional)
+      responses:
+        "200": {description: Ready or degraded (body indicates status)}
+        "503": {description: Critical downstream unavailable}
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text format
+          content:
+            text/plain: {}
+  /api/v1/auth/{path}:
+    x-proxy-target: M1 Identity
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    get: {summary: Proxy to M1 auth, responses: {"200": {description: Proxied}}}
+    post: {summary: Proxy to M1 auth, responses: {"200": {description: Proxied}}}
+  /api/v1/users/{path}:
+    x-proxy-target: M1 Identity
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    get: {summary: Proxy to M1 users, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+    post: {summary: Proxy to M1 users, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+    patch: {summary: Proxy to M1 users, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+    delete: {summary: Proxy to M1 users, security: [{bearerAuth: []}], responses: {"204": {description: Proxied}}}
+  /api/v1/ingest/{path}:
+    x-proxy-target: M2 Ingest
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    post: {summary: Proxy to M2, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+  /api/v1/pipeline/{path}:
+    x-proxy-target: M3 Chunk/Embed
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    post: {summary: Proxy to M3, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+  /api/v1/rag/{path}:
+    x-proxy-target: M4 RAG
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    get: {summary: Proxy to M4, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+    post: {summary: Proxy to M4, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+  /api/v1/admin/{path}:
+    x-proxy-target: M7 Admin
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    get: {summary: Proxy to M7, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+    post: {summary: Proxy to M7, security: [{bearerAuth: []}], responses: {"200": {description: Proxied}}}
+  /api/v1/web-search/{path}:
+    x-proxy-target: M8 Web Search
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema: {type: string}
+    get: {summary: Proxy to M8 (requires web.search), security: [{bearerAuth: []}], responses: {"200": {description: Proxied}, "403": {description: Missing web.search permission}}}
+    post: {summary: Proxy to M8 (requires web.search), security: [{bearerAuth: []}], responses: {"200": {description: Proxied}, "403": {description: Missing web.search permission}}}
+  /api/v1/chat:
+    post:
+      summary: RAG chat with SSE streaming (requires chat.use permission)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: {type: string}
+                session_id: {type: string}
+                use_web_search: {type: boolean, default: false}
+                web_provider:
+                  type: string
+                  enum: [curated, brave, exa, searxng, mock]
+                  nullable: true
+      responses:
+        "200":
+          description: SSE stream of token deltas
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE events: event: token\\ndata: {\"delta\": \"...\"}"
+        "401": {description: Unauthorized}
+        "403": {description: Missing chat.use or web.search permission}
+        "429": {description: Rate limited (X-RateLimit-* headers present)}

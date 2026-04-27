@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m3-chunk-embed"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "pydantic-settings>=2.0",
+    "httpx>=0.25",
+    "rag-shared",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "pgvector>=0.3",
+    "alembic>=1.13",
+    "sentence-transformers>=3.0",
+    "transformers>=4.40",
+    "torch",
+    "redis>=5.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.25"]

@@ -1,0 +1,7 @@
+{
+  "/chat/[sessionId]/page": "app/chat/[sessionId]/page.js",
+  "/page": "app/page.js",
+  "/chat/page": "app/chat/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/login/page": "app/login/page.js"
+}

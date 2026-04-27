@@ -1,0 +1,153 @@
+include:
+  - docker-compose.base.yml
+  - ../modules/m1-identity/docker-compose.module.yml
+  - ../modules/m2-doc-to-md/docker-compose.module.yml
+  - ../modules/m3-chunk-embed/docker-compose.module.yml
+  - ../modules/m4-rag/docker-compose.module.yml
+  - ../modules/m5-gateway/docker-compose.module.yml
+  - ../modules/m8-web-search/docker-compose.module.yml
+  - ../modules/m7-admin/backend/docker-compose.module.yml
+
+secrets:
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  postgres_password:
+    file: ./secrets/postgres_password
+  neo4j_password:
+    file: ./secrets/neo4j_password
+
+services:
+  m1-identity:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    secrets: [jwt_secret, postgres_password]
+    environment:
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  m2-doc-to-md:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  m3-chunk-embed:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  m4-rag:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      NVIDIA_VISIBLE_DEVICES: "0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  m5-gateway:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    secrets: [jwt_secret]
+    environment:
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  m7-admin:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    secrets: [jwt_secret, postgres_password]
+    environment:
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  m8-web-search:
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - audit_logs:/var/log/rag-audit
+    environment:
+      M8_AUDIT_LOG: /var/log/rag-audit/m8-web-search.jsonl
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  audit_logs:
+    driver: local
+
+networks:
+  ragnet:
+    driver: bridge
+    internal: ${RAGNET_INTERNAL:-true}
+  web_egress:
+    driver: bridge

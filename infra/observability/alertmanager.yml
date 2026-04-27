@@ -1,0 +1,19 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: 'default'
+  group_by: ['alertname', 'severity']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+
+receivers:
+  - name: 'default'
+    webhook_configs:
+      - url: 'http://m7-admin-backend:8000/admin/alerts/webhook'
+        send_resolved: true
+        http_config:
+          follow_redirects: true
+
+inhibit_rules: []

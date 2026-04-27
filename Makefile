@@ -1,146 +1,167 @@
-# =============================================================================
-# On-Premise RAG-LLM System v2 — Makefile
-# =============================================================================
+# RAG-LLM 8-Module Monorepo — Root Makefile
+# Per-module: cd modules/<m> && make help
+# This file: cross-module orchestration only
 
-.PHONY: help up up-local up-local-ui down restart ps ps-local logs build clean \
-        up-gpu up-infra up-pipeline up-serving up-sync up-frontend \
-        logs-pipeline logs-serving logs-sync logs-vllm logs-mineru \
-        shell-pipeline shell-serving shell-sync shell-db \
-        db-psql db-reset init test lint eval-phase3 check-endpoints
+DC := docker compose
+INFRA := -f infra/docker-compose.yml
+BASE := -f infra/docker-compose.base.yml
+MOCK := -f infra/docker-compose.mock.yml
+OBS := -f infra/docker-compose.observability.yml
 
-# Default
-help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+BACKEND_MODS := m1-identity m2-doc-to-md m3-chunk-embed m4-rag m5-gateway m8-web-search m7-admin/backend
+FRONT_MODS := m6-ui m7-admin/frontend
+ALL_MODS := $(BACKEND_MODS) $(FRONT_MODS)
 
-# ─── Docker Compose ──────────────────────────────────────────────────────────
+.DEFAULT_GOAL := help
 
-up: ## Start all services (CPU mode)
-	docker compose up -d
-
-up-local: ## Start local smoke stack for macOS/Apple Silicon
-	docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
-		postgres redis neo4j pipeline-api pipeline-worker serving-api sync-scheduler frontend
-
-up-local-ui: ## Start minimal local UI/admin stack without MinerU
-	docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build \
-		postgres redis serving-api frontend
-
-up-gpu: ## Start all services including vLLM (GPU mode)
-	docker compose --profile gpu up -d
-
-up-infra: ## Start infrastructure only (PostgreSQL, Neo4j, Redis)
-	docker compose -f docker-compose.base.yml up -d
-
-up-pipeline: ## Start pipeline services
-	docker compose up -d pipeline-api pipeline-worker mineru-api
-
-up-serving: ## Start serving services
-	docker compose up -d serving-api
-
-up-sync: ## Start sync/monitor services
-	docker compose up -d sync-scheduler sync-dashboard
-
-up-frontend: ## Start frontend
-	docker compose up -d frontend
-
-down: ## Stop all services
-	docker compose --profile gpu down
-
-restart: ## Restart all services
-	docker compose --profile gpu down && docker compose up -d
-
-build: ## Build all images
-	docker compose build
-
-ps: ## Show running containers
-	docker compose ps
-
-ps-local: ## Show running containers for local smoke stack
-	docker compose -f docker-compose.yml -f docker-compose.local.yml ps
-
-# ─── Logs ─────────────────────────────────────────────────────────────────────
-
-logs: ## Tail all logs
-	docker compose logs -f --tail=100
-
-logs-pipeline: ## Tail pipeline logs (API + Worker)
-	docker compose logs -f --tail=100 pipeline-api pipeline-worker
-
-logs-serving: ## Tail serving API logs
-	docker compose logs -f --tail=100 serving-api
-
-logs-sync: ## Tail sync/monitor logs
-	docker compose logs -f --tail=100 sync-scheduler sync-dashboard
-
-logs-vllm: ## Tail vLLM logs
-	docker compose logs -f --tail=100 vllm-server
-
-logs-mineru: ## Tail MinerU logs
-	docker compose logs -f --tail=100 mineru-api
-
-# ─── Shell Access ─────────────────────────────────────────────────────────────
-
-shell-pipeline: ## Open shell in pipeline-api container
-	docker compose exec pipeline-api bash
-
-shell-serving: ## Open shell in serving-api container
-	docker compose exec serving-api bash
-
-shell-sync: ## Open shell in sync-scheduler container
-	docker compose exec sync-scheduler bash
-
-shell-db: ## Open psql in PostgreSQL container
-	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system}
-
-# ─── Database ─────────────────────────────────────────────────────────────────
-
-db-psql: ## Connect to PostgreSQL via psql
-	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system}
-
-db-reset: ## Reset database (drop + recreate from init.sql)
-	@echo "WARNING: This will destroy all data!"
-	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -c "DROP DATABASE IF EXISTS $${POSTGRES_DB:-rag_system}"
-	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -c "CREATE DATABASE $${POSTGRES_DB:-rag_system}"
-	docker compose exec postgres psql -U $${POSTGRES_USER:-admin} -d $${POSTGRES_DB:-rag_system} -f /docker-entrypoint-initdb.d/01_init.sql
-
-# ─── Init ─────────────────────────────────────────────────────────────────────
-
-init: ## First-time setup: copy .env, build, start
-	@test -f .env || (cp .env.example .env && echo "Created .env from .env.example — edit it before starting!")
-	docker compose build
-	docker compose up -d
+help: ## Show targets
+	@awk 'BEGIN{FS=":.*?## "} /^[a-zA-Z0-9_.-]+:.*?## .*/ {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
-	@echo "Services starting... check with: make ps"
-	@echo "Next: edit .env passwords, then run: make restart"
+	@echo "  Per-module: cd modules/<m> && make help"
 
-# ─── Development ──────────────────────────────────────────────────────────────
+# ─── First-time setup ──────────────────────────────────────────────────────
+bootstrap: ## Install shared-py + all backend modules (editable)
+	@for m in $(BACKEND_MODS); do $(MAKE) -C modules/$$m install || exit 1; done
+	@echo "Done. Run 'make up' or 'make up-mock'."
 
-dev-infra: ## Start infra + run services locally
-	docker compose -f docker-compose.base.yml up -d
-	@echo ""
-	@echo "Infrastructure ready. Run services locally:"
-	@echo "  uvicorn rag_pipeline.api.main:app --port 8001 --reload"
-	@echo "  uvicorn rag_serving.api.main:app --port 8002 --reload"
-	@echo "  streamlit run rag_sync_monitor/dashboard/app.py --server.port 8003"
-	@echo "  cd frontend && npm run dev"
+install-fe: ## npm install for both frontends
+	@for m in $(FRONT_MODS); do $(MAKE) -C modules/$$m install || exit 1; done
 
-test: ## Run tests
-	python -m pytest tests/ -v
+# ─── Per-module delegation ─────────────────────────────────────────────────
+test: ## Run tests in all backend modules
+	@for m in $(BACKEND_MODS); do \
+		echo "=== test $$m ==="; \
+		$(MAKE) -C modules/$$m test || exit 1; \
+	done
 
-lint: ## Run linter
-	python -m ruff check .
+test-fe: ## Run tests in both frontends
+	@for m in $(FRONT_MODS); do \
+		echo "=== test $$m ==="; \
+		$(MAKE) -C modules/$$m test || exit 1; \
+	done
 
-eval-phase3: ## Run Phase 3 retrieval evaluation (requires admin auth env vars)
-	python scripts/eval_phase3.py --dataset eval/phase3_queries.sample.jsonl
+test-all: test test-fe test-e2e ## All unit + e2e
 
-check-endpoints: ## Smoke-check auth/chat/admin endpoints (requires auth env vars)
-	python scripts/check_endpoints.py
+lint: ## Lint all modules
+	@for m in $(ALL_MODS); do \
+		echo "=== lint $$m ==="; \
+		$(MAKE) -C modules/$$m lint || exit 1; \
+	done
 
-# ─── Cleanup ──────────────────────────────────────────────────────────────────
+fmt: ## Format all modules
+	@for m in $(ALL_MODS); do $(MAKE) -C modules/$$m fmt; done
 
-clean: ## Remove all containers, volumes, and images
-	@echo "WARNING: This will remove all containers, volumes, and built images!"
-	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	docker compose --profile gpu down -v --rmi local
+clean: ## Clean all caches
+	@for m in $(ALL_MODS); do $(MAKE) -C modules/$$m clean; done
+
+# ─── Migrations ────────────────────────────────────────────────────────────
+migrate: ## Run alembic upgrade head on M1, M3
+	@for m in m1-identity m3-chunk-embed; do \
+		$(MAKE) -C modules/$$m migrate; \
+	done
+
+# ─── Compose orchestration ─────────────────────────────────────────────────
+up: ## Full stack (real mode)
+	$(DC) $(INFRA) up -d --build
+
+up-mock: ## Full stack (all mock)
+	$(DC) $(INFRA) $(MOCK) up -d --build
+
+up-one: ## Single module + base infra (m=m3-chunk-embed)
+	$(DC) $(BASE) -f modules/$(m)/docker-compose.module.yml up -d --build
+
+down: ## Stop stack (volumes kept)
+	$(DC) $(INFRA) down
+
+down-clean: ## Stop + remove volumes
+	$(DC) $(INFRA) down -v
+
+infra-up: ## Postgres + Neo4j + Redis only
+	$(DC) $(BASE) up -d
+
+infra-down: ## Stop infra
+	$(DC) $(BASE) down
+
+ps: ## docker compose ps
+	$(DC) $(INFRA) ps
+
+logs: ## Tail logs (s=m5-gateway)
+	$(DC) $(INFRA) logs -f $(s)
+
+# ─── Contracts ─────────────────────────────────────────────────────────────
+contracts: ## YAML syntax validate
+	@for f in packages/contracts/*.yaml; do \
+		python3 -c "import yaml; yaml.safe_load(open('$$f'))" && echo "OK $$f" || exit 1; \
+	done
+
+contracts-validate: ## redocly lint OpenAPI specs
+	@for f in packages/contracts/*.yaml; do redocly lint "$$f" --format=stylish || exit 1; done
+
+contracts-lock: ## Update contract SHA256 locks
+	bash scripts/contracts-lock.sh
+
+contracts-verify: ## Verify no contract drift
+	bash scripts/contracts-verify.sh
+
+# ─── E2E ───────────────────────────────────────────────────────────────────
+test-e2e: ## E2E integration tests (requires Docker)
+	python3 -m pytest tests-e2e/ -v --tb=short
+
+# ─── Observability + Load ──────────────────────────────────────────────────
+obs-up: ## Start Prometheus + Grafana + Loki stack
+	$(DC) $(OBS) up -d
+
+obs-down: ## Stop observability stack
+	$(DC) $(OBS) down
+
+LOAD_HOST ?= http://localhost:8000
+
+load-test: ## 100u / 200qpm sustained 30min
+	locust -f loadtest/locustfile.py --host=$(LOAD_HOST) -u 100 -r 10 -t 30m \
+	  --headless --csv=loadtest/results/sustained
+	python3 loadtest/analyze.py loadtest/results/sustained
+
+load-spike: ## Spike 0→200 over 30s
+	locust -f loadtest/scenarios/spike.py --host=$(LOAD_HOST) \
+	  --headless --csv=loadtest/results/spike
+
+# ─── Backup ────────────────────────────────────────────────────────────────
+POSTGRES_USER ?= postgres
+POSTGRES_DB ?= ragdb
+
+backup-pg: ## pg_dump → backups/
+	@mkdir -p backups
+	$(DC) $(INFRA) exec -T postgres \
+	  pg_dump -U $(POSTGRES_USER) $(POSTGRES_DB) | gzip > backups/postgres_$(shell date +%Y%m%d_%H%M%S).sql.gz
+
+backup-neo4j: ## neo4j-admin dump → backups/
+	@mkdir -p backups
+	$(DC) $(INFRA) exec -T neo4j \
+	  neo4j-admin database dump neo4j --to-stdout > backups/neo4j_$(shell date +%Y%m%d_%H%M%S).dump
+
+backup-all: backup-pg backup-neo4j ## All databases
+
+# ─── CI mirrors ────────────────────────────────────────────────────────────
+lint-ci: lint ## (alias)
+
+security-scan: ## bandit + safety + npm audit
+	bandit -r modules/ packages/shared-py/ \
+	  --exclude modules/m6-ui,modules/m7-admin/frontend -ll -q || true
+	safety check --full-report || true
+	@for m in $(FRONT_MODS); do npm audit --audit-level=high --prefix modules/$$m || true; done
+
+# ─── Production helpers ─────────────────────────────────────────────────────
+build-images: ## Build all module docker images
+	$(DC) $(INFRA) build
+
+env-check: ## Verify required env vars
+	@for v in JWT_SECRET POSTGRES_URL REDIS_URL VLLM_URL; do \
+	  test -n "$${!v}" && echo "OK $$v" || echo "MISSING $$v"; \
+	done
+
+.PHONY: help bootstrap install-fe test test-fe test-all test-e2e lint fmt clean migrate \
+        up up-mock up-one down down-clean infra-up infra-down ps logs \
+        contracts contracts-validate contracts-lock contracts-verify \
+        obs-up obs-down load-test load-spike \
+        backup-pg backup-neo4j backup-all \
+        lint-ci security-scan build-images env-check

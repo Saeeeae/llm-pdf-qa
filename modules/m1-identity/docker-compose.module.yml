@@ -1,0 +1,16 @@
+services:
+  m1-identity:
+    build:
+      context: ../..
+      dockerfile: modules/m1-identity/Dockerfile
+    ports:
+      - "8101:8000"
+    env_file: .env.example
+    environment:
+      MODULE_IMPL: ${MODULE_IMPL:-real}
+    networks:
+      - ragnet
+
+networks:
+  ragnet:
+    external: true

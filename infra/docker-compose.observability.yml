@@ -1,0 +1,72 @@
+services:
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prom_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_password
+    secrets:
+      - grafana_password
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:2.9.6
+    volumes:
+      - ./observability/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command:
+      - "-config.file=/etc/loki/local-config.yaml"
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.6
+    volumes:
+      - ./observability/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - audit_logs:/var/log/rag-audit:ro
+    command:
+      - "-config.file=/etc/promtail/config.yml"
+    restart: unless-stopped
+    depends_on:
+      - loki
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+volumes:
+  prom_data:
+  grafana_data:
+  loki_data:
+  audit_logs:
+    external: true
+
+secrets:
+  grafana_password:
+    file: ./secrets/grafana_password

@@ -1,0 +1,680 @@
+openapi: "3.1.0"
+info:
+  title: M7 Admin Backend
+  version: "2.0.0"
+  description: >
+    Admin API for the RAG-LLM service.
+    All /admin/* endpoints require JWT bearer auth.
+    /admin/ws is a WebSocket endpoint; auth is validated at connection time.
+
+servers:
+  - url: /api/v1
+    description: Via M5 Gateway
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AuditEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        action:
+          type: string
+        resource_type:
+          type: string
+          nullable: true
+        resource_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    UserRow:
+      type: object
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        role:
+          type: string
+        department:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ServiceStatus:
+      type: object
+      required: [name, status, checked_at]
+      properties:
+        name:
+          type: string
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        checked_at:
+          type: string
+          format: date-time
+        error:
+          type: string
+          nullable: true
+
+    GpuMetrics:
+      type: object
+      properties:
+        utilization_pct:
+          type: number
+        memory_used_mb:
+          type: number
+        memory_total_mb:
+          type: number
+        error:
+          type: string
+          nullable: true
+
+    ServerMetrics:
+      type: object
+      properties:
+        cpu_pct:
+          type: number
+        ram_used_mb:
+          type: number
+        ram_total_mb:
+          type: number
+        ram_pct:
+          type: number
+        disk_used_gb:
+          type: number
+        disk_total_gb:
+          type: number
+        disk_pct:
+          type: number
+
+    PipelineRun:
+      type: object
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        doc_count:
+          type: string
+          nullable: true
+        duration_s:
+          type: string
+          nullable: true
+        failures:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+
+    WebSearchProvider:
+      type: object
+      properties:
+        name:
+          type: string
+        configured:
+          type: boolean
+        external:
+          type: boolean
+        notes:
+          type: string
+          nullable: true
+
+    WebSearchAuditSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        allowed:
+          type: integer
+        blocked:
+          type: integer
+        failed:
+          type: integer
+        cache_hits:
+          type: integer
+        external:
+          type: integer
+        failure_rate:
+          type: number
+        estimated_cost_usd:
+          type: number
+        providers:
+          type: object
+          additionalProperties:
+            type: integer
+        recent:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    ImpersonateResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: bearer
+        expires_in:
+          type: integer
+          description: Seconds until expiry (600 = 10 minutes)
+          example: 600
+
+    WsEvent:
+      type: object
+      description: >
+        WebSocket message frame broadcast to /admin/ws clients.
+        channel is one of: audit_events, pipeline_events.
+      required: [channel, data]
+      properties:
+        channel:
+          type: string
+          enum: [audit_events, pipeline_events]
+        data:
+          type: object
+          additionalProperties: true
+
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+
+paths:
+  /health:
+    get:
+      summary: Liveness check (public)
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  module:
+                    type: string
+                    example: m7-admin
+
+  /ready:
+    get:
+      summary: Readiness check (public)
+      operationId: ready
+      responses:
+        "200":
+          description: Ready
+
+  /metrics:
+    get:
+      summary: Prometheus metrics (public)
+      operationId: prometheusMetrics
+      responses:
+        "200":
+          description: Prometheus text format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /admin/audit-log:
+    get:
+      summary: Paginated audit log
+      operationId: getAuditLog
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+            example: chat.query
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Paginated audit log entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditEntry"
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  size:
+                    type: integer
+        "401":
+          description: Missing or invalid token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission (requires audit.read)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /admin/users:
+    get:
+      summary: List users with last login and activity
+      operationId: listUsers
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: role
+          in: query
+          schema:
+            type: string
+        - name: department
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserRow"
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Insufficient permission (requires admin.read)
+
+  /admin/users/{user_id}/impersonate:
+    post:
+      summary: Issue short-lived impersonation token (10 min)
+      operationId: impersonateUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Impersonation JWT (expires_in=600s). Action is audit-logged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImpersonateResponse"
+        "403":
+          description: Requires admin.write permission
+        "404":
+          description: Target user not found
+
+  /admin/metrics/embedding:
+    get:
+      summary: Embedding metrics from M3
+      operationId: metricsEmbedding
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Embedding stats (proxied from M3 /chunk-embed/stats, cached 30 s in Redis)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_docs:
+                    type: integer
+                    nullable: true
+                  chunks_per_doc_avg:
+                    type: number
+                    nullable: true
+                  last_embedding_run:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  avg_latency_ms:
+                    type: number
+                    nullable: true
+                  error:
+                    type: string
+                    nullable: true
+
+  /admin/metrics/chunking:
+    get:
+      summary: Chunking metrics from M3
+      operationId: metricsChunking
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Chunking stats (proxied from M3 /chunker/stats)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /admin/metrics/gpu:
+    get:
+      summary: GPU utilization (nvidia-smi)
+      operationId: metricsGpu
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: GPU metrics (cached 30 s in Redis)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GpuMetrics"
+
+  /admin/metrics/server:
+    get:
+      summary: Server resource usage (psutil)
+      operationId: metricsServer
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: CPU / RAM / disk usage of the host running M7 backend
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerMetrics"
+
+  /admin/health/aggregate:
+    get:
+      summary: Parallel health probe of all modules + infra
+      operationId: healthAggregate
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Health of M1–M5 + Postgres + Neo4j + Redis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ServiceStatus"
+
+  /admin/logs/query:
+    get:
+      summary: Chat query log with latency + token cost
+      operationId: logsQuery
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Recent chat queries with user + latency + cost estimate
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        user_id:
+                          type: string
+                        email:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+                        latency_ms:
+                          type: string
+                          nullable: true
+                        status:
+                          type: string
+                          nullable: true
+                        query:
+                          type: string
+                          nullable: true
+
+  /admin/pipeline/runs:
+    get:
+      summary: M2 pipeline run history
+      operationId: pipelineRuns
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Pipeline run records from audit_log (action=pipeline.run)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PipelineRun"
+
+  /admin/web-search/providers:
+    get:
+      summary: M8 web search provider status
+      operationId: getWebSearchProviders
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Provider status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebSearchProvider"
+        "403":
+          description: Requires admin.read permission
+
+  /admin/web-search/audit-summary:
+    get:
+      summary: Redacted web search audit summary
+      operationId: getWebSearchAuditSummary
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Audit summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSearchAuditSummary"
+        "403":
+          description: Requires audit.read permission
+
+  /admin/web-search/policy:
+    get:
+      summary: M8 web search policy summary
+      operationId: getWebSearchPolicy
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Policy summary
+        "403":
+          description: Requires admin.read permission
+
+  /admin/export/audit-log.csv:
+    get:
+      summary: Stream CSV or XLSX export of audit log
+      operationId: exportAuditLogCsv
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: action
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, xlsx]
+            default: csv
+      responses:
+        "200":
+          description: Streamed file download (CSV or XLSX)
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+                example: attachment; filename="audit-log.csv"
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "403":
+          description: Requires audit.read permission
+
+  /admin/ws:
+    get:
+      summary: >
+        WebSocket: real-time admin event stream.
+        Upgrade required. Publishes audit_events and pipeline_events from Redis pub/sub.
+        Contract: M1 publishes audit events; M2/M3 publish pipeline events.
+      operationId: adminWebSocket
+      security:
+        - bearerAuth: []
+      responses:
+        "101":
+          description: WebSocket upgrade (Switching Protocols)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WsEvent"
+        "401":
+          description: Missing or invalid token
+        "403":
+          description: Requires admin.read permission

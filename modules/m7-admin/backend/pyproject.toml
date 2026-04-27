@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m7-admin"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "uvloop>=0.19",
+    "httptools>=0.6",
+    "websockets>=12.0",
+    "pydantic-settings>=2.0",
+    "httpx>=0.25",
+    "asyncpg>=0.29",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite>=0.20",
+    "redis>=5",
+    "psutil>=5.9",
+    "python-jose[cryptography]>=3.3",
+    "prometheus-client>=0.20",
+    "openpyxl>=3.1",
+    "pandas>=2.0",
+    "rag-shared",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.25",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

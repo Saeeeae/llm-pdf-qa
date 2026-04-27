@@ -1,0 +1,20 @@
+services:
+  m8-web-search:
+    build:
+      context: ../..
+      dockerfile: modules/m8-web-search/Dockerfile
+    ports:
+      - "8108:8000"
+    env_file: .env.example
+    environment:
+      MODULE_IMPL: ${MODULE_IMPL:-real}
+      M8_DEFAULT_PROVIDER: ${M8_DEFAULT_PROVIDER:-curated}
+    networks:
+      - ragnet
+      - web_egress
+
+networks:
+  ragnet:
+    external: true
+  web_egress:
+    driver: bridge

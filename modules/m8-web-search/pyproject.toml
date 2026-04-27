@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "m8-web-search"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.29",
+    "pydantic-settings>=2.0",
+    "httpx>=0.25",
+    "rag-shared",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "httpx>=0.25"]

@@ -1,0 +1,30 @@
+# Overlay: set MODULE_IMPL=mock for all module services. Infra (postgres/neo4j/redis) stays real.
+services:
+  m1-identity:
+    environment:
+      MODULE_IMPL: mock
+
+  m2-doc-to-md:
+    environment:
+      MODULE_IMPL: mock
+
+  m3-chunk-embed:
+    environment:
+      MODULE_IMPL: mock
+
+  m4-rag:
+    environment:
+      MODULE_IMPL: mock
+
+  m5-gateway:
+    environment:
+      MODULE_IMPL: mock
+      NEXT_PUBLIC_USE_MOCKS: "1"
+
+  m8-web-search:
+    environment:
+      MODULE_IMPL: mock
+
+  m7-admin:
+    environment:
+      MODULE_IMPL: mock

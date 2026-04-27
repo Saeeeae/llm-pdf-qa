@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+env:
+  JWT_SECRET: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  POSTGRES_URL: "postgresql+asyncpg://postgres:test@localhost:5432/rag"
+  REDIS_URL: "redis://localhost:6379/0"
+
+jobs:
+  # ─── 1. Detect changed modules ─────────────────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      any-py: ${{ steps.f.outputs.any-py }}
+      any-fe: ${{ steps.f.outputs.any-fe }}
+      contracts: ${{ steps.f.outputs.contracts }}
+      modules-py: ${{ steps.f.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          list-files: none
+          filters: |
+            any-py:
+              - 'modules/m{1,2,3,4,5,8}-**/**'
+              - 'modules/m7-admin/backend/**'
+              - 'packages/shared-py/**'
+            any-fe:
+              - 'modules/m6-ui/**'
+              - 'modules/m7-admin/frontend/**'
+            contracts:
+              - 'packages/contracts/**'
+            m1:  ['modules/m1-identity/**', 'packages/shared-py/**']
+            m2:  ['modules/m2-doc-to-md/**', 'packages/shared-py/**']
+            m3:  ['modules/m3-chunk-embed/**', 'packages/shared-py/**']
+            m4:  ['modules/m4-rag/**', 'packages/shared-py/**']
+            m5:  ['modules/m5-gateway/**', 'packages/shared-py/**']
+            m7b: ['modules/m7-admin/backend/**', 'packages/shared-py/**']
+            m8:  ['modules/m8-web-search/**', 'packages/shared-py/**']
+            m6:  ['modules/m6-ui/**']
+            m7f: ['modules/m7-admin/frontend/**']
+
+  # ─── 2. Python lint (ruff + mypy) ──────────────────────────────────────────
+  lint-py:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-py == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [m1-identity, m2-doc-to-md, m3-chunk-embed, m4-rag, m5-gateway,
+                 m8-web-search, m7-admin/backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: |
+          pip install ruff mypy
+          pip install -e packages/shared-py
+          pip install -e modules/${{ matrix.module }}
+      - run: ruff check modules/${{ matrix.module }}
+      - run: mypy modules/${{ matrix.module }} --ignore-missing-imports --no-strict-optional
+
+  # ─── 3. Python tests ───────────────────────────────────────────────────────
+  test-py:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-py == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env: { POSTGRES_PASSWORD: test, POSTGRES_DB: rag }
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 5
+        ports: ["6379:6379"]
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [m1-identity, m2-doc-to-md, m3-chunk-embed, m4-rag, m5-gateway,
+                 m8-web-search, m7-admin/backend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: |
+          pip install pytest pytest-asyncio httpx aiosqlite
+          pip install -e packages/shared-py
+          pip install -e modules/${{ matrix.module }}
+      - run: |
+          cd modules/${{ matrix.module }}
+          TEST_MODE=1 python -m pytest tests/ -q --tb=short
+
+  # ─── 4. Frontend lint (eslint + tsc) ───────────────────────────────────────
+  lint-fe:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-fe == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [m6-ui, m7-admin/frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: modules/${{ matrix.module }}/package-lock.json
+      - run: npm ci --prefix modules/${{ matrix.module }}
+      - run: npm run lint --prefix modules/${{ matrix.module }}
+      - run: npm run typecheck --prefix modules/${{ matrix.module }}
+
+  # ─── 5. Frontend tests (vitest) ────────────────────────────────────────────
+  test-fe:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any-fe == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [m6-ui, m7-admin/frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: modules/${{ matrix.module }}/package-lock.json
+      - run: npm ci --prefix modules/${{ matrix.module }}
+      - run: npm run test --prefix modules/${{ matrix.module }}
+
+  # ─── 6. Contracts validation (redocly) ─────────────────────────────────────
+  contracts-diff:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.contracts == 'true' || needs.detect-changes.outputs.any-py == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm install -g @redocly/cli
+      - name: Validate all OpenAPI YAMLs
+        run: |
+          for f in packages/contracts/*.yaml; do
+            echo "==> $f"; redocly lint "$f" --format=stylish
+          done
+      - name: Breaking-change diff vs main
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin main
+          for f in packages/contracts/*.yaml; do
+            name=$(basename "$f")
+            if git diff --name-only origin/main HEAD -- "packages/contracts/$name" | grep -q .; then
+              echo "==> diff: $name"
+              git show origin/main:"packages/contracts/$name" > /tmp/old_"$name" 2>/dev/null && \
+                redocly diff /tmp/old_"$name" "$f" || true
+            fi
+          done
+      - name: Verify contract SHA256 locks (no drift)
+        run: bash scripts/contracts-verify.sh

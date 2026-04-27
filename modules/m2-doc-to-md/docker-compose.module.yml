@@ -1,0 +1,16 @@
+services:
+  m2-doc-to-md:
+    build:
+      context: ../..
+      dockerfile: modules/m2-doc-to-md/Dockerfile
+    ports:
+      - "8102:8000"
+    env_file: .env.example
+    environment:
+      MODULE_IMPL: ${MODULE_IMPL:-real}
+    networks:
+      - ragnet
+
+networks:
+  ragnet:
+    external: true

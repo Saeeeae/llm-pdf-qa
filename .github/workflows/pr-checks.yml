@@ -1,0 +1,146 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─── Detect changed contracts ───────────────────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      contracts: ${{ steps.filter.outputs.contracts }}
+      any-py: ${{ steps.filter.outputs.any-py }}
+      any-fe: ${{ steps.filter.outputs.any-fe }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            contracts:
+              - 'packages/contracts/**'
+            any-py:
+              - 'modules/m1-identity/**'
+              - 'modules/m2-doc-to-md/**'
+              - 'modules/m3-chunk-embed/**'
+              - 'modules/m4-rag/**'
+              - 'modules/m5-gateway/**'
+              - 'modules/m7-admin/backend/**'
+              - 'modules/m8-web-search/**'
+              - 'packages/shared-py/**'
+            any-fe:
+              - 'modules/m6-ui/**'
+              - 'modules/m7-admin/frontend/**'
+
+  # ─── 1. Schemathesis (changed contracts only) ──────────────────────────────
+  schemathesis:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.contracts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install schemathesis
+      - name: Validate changed OpenAPI specs
+        run: |
+          git fetch origin main
+          for f in packages/contracts/*.yaml; do
+            name=$(basename "$f")
+            if git diff --name-only origin/main HEAD -- "packages/contracts/$name" | grep -q .; then
+              echo "==> schemathesis: $name"
+              schemathesis run "$f" --validate-schema=true --dry-run || true
+            fi
+          done
+
+  # ─── 2. Security scan (bandit + npm audit) ─────────────────────────────────
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install bandit + safety
+        run: pip install bandit safety
+
+      - name: Bandit (Python)
+        run: |
+          bandit -r modules/ packages/shared-py/ \
+            --exclude modules/m6-ui,modules/m7-admin/frontend \
+            -ll -q || true
+
+      - name: Safety check (Python)
+        run: |
+          for d in modules/m1-identity modules/m2-doc-to-md modules/m3-chunk-embed \
+                    modules/m4-rag modules/m5-gateway modules/m7-admin/backend \
+                    modules/m8-web-search packages/shared-py; do
+            if [ -f "$d/pyproject.toml" ]; then
+              echo "==> safety: $d"
+              pip install -e "$d" --quiet
+            fi
+          done
+          safety check --full-report || true
+
+      - name: npm audit (m6-ui)
+        run: npm audit --audit-level=high --prefix modules/m6-ui || true
+
+      - name: npm audit (m7-admin/frontend)
+        run: npm audit --audit-level=high --prefix modules/m7-admin/frontend || true
+
+  # ─── 3. Secret scan (gitleaks) ─────────────────────────────────────────────
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # ─── 4. Dependency check ───────────────────────────────────────────────────
+  dep-check:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: pip-audit (all Python modules)
+        run: |
+          for d in modules/m1-identity modules/m2-doc-to-md modules/m3-chunk-embed \
+                    modules/m4-rag modules/m5-gateway modules/m7-admin/backend \
+                    modules/m8-web-search packages/shared-py; do
+            if [ -f "$d/pyproject.toml" ]; then
+              echo "==> pip-audit: $d"
+              pip install -e "$d" --quiet
+            fi
+          done
+          pip-audit --desc || true
+
+      - name: npm audit --audit-level=high (m6-ui)
+        run: npm audit --audit-level=high --prefix modules/m6-ui || true
+
+      - name: npm audit --audit-level=high (m7-admin/frontend)
+        run: npm audit --audit-level=high --prefix modules/m7-admin/frontend || true

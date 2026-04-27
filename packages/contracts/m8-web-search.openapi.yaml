@@ -1,0 +1,131 @@
+openapi: "3.1.0"
+info:
+  title: M8 Web Search
+  version: "0.1.0"
+  description: Guarded on-prem web search boundary. Only sanitized safe_query is sent to external providers.
+components:
+  schemas:
+    SearchRequest:
+      type: object
+      required: [query]
+      properties:
+        query: {type: string}
+        provider:
+          type: string
+          enum: [curated, brave, exa, searxng, mock]
+          nullable: true
+        locale: {type: string, default: ko-KR}
+        freshness: {type: string, nullable: true}
+        domains:
+          type: array
+          items: {type: string}
+        max_results: {type: integer, default: 5, minimum: 1, maximum: 20}
+    SearchResult:
+      type: object
+      properties:
+        title: {type: string}
+        url: {type: string}
+        snippet: {type: string}
+        source: {type: string}
+        published_at: {type: string, nullable: true}
+        fetched_at: {type: string, format: date-time, nullable: true}
+    SearchResponse:
+      type: object
+      properties:
+        provider: {type: string}
+        safe_query: {type: string}
+        query_hash: {type: string}
+        blocked: {type: boolean}
+        blocked_reason: {type: string, nullable: true}
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+        audit_id: {type: string}
+    FetchRequest:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, format: uri}
+        max_chars: {type: integer, default: 6000}
+    AuditSummary:
+      type: object
+      properties:
+        total: {type: integer}
+        allowed: {type: integer}
+        blocked: {type: integer}
+        failed: {type: integer}
+        cache_hits: {type: integer}
+        external: {type: integer}
+        failure_rate: {type: number}
+        estimated_cost_usd: {type: number}
+        providers:
+          type: object
+          additionalProperties:
+            type: integer
+        recent:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      responses:
+        "200": {description: OK}
+  /ready:
+    get:
+      summary: Readiness check
+      responses:
+        "200": {description: Ready}
+  /web-search/search:
+    post:
+      summary: Search the web through the guarded M8 boundary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search result or DLP-blocked decision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400": {description: Unknown provider}
+        "502": {description: External provider error}
+        "503": {description: Provider not configured}
+  /web-search/fetch:
+    post:
+      summary: Fetch and sanitize an allowed web page
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FetchRequest"
+      responses:
+        "200": {description: Sanitized page text or blocked decision}
+        "502": {description: Fetch failed}
+  /web-search/providers:
+    get:
+      summary: List configured providers
+      responses:
+        "200": {description: Provider list}
+  /web-search/audit/summary:
+    get:
+      summary: Redacted external-search audit summary
+      responses:
+        "200":
+          description: Audit summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditSummary"

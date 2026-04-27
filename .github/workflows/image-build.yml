@@ -1,0 +1,118 @@
+name: Build & Push Images
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  # ─── Detect which modules changed ──────────────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      m1: ${{ steps.filter.outputs.m1 }}
+      m2: ${{ steps.filter.outputs.m2 }}
+      m3: ${{ steps.filter.outputs.m3 }}
+      m4: ${{ steps.filter.outputs.m4 }}
+      m5: ${{ steps.filter.outputs.m5 }}
+      m7-be: ${{ steps.filter.outputs.m7-be }}
+      m7-fe: ${{ steps.filter.outputs.m7-fe }}
+      m6: ${{ steps.filter.outputs.m6 }}
+      m8: ${{ steps.filter.outputs.m8 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            m1:
+              - 'modules/m1-identity/**'
+              - 'packages/shared-py/**'
+            m2:
+              - 'modules/m2-doc-to-md/**'
+              - 'packages/shared-py/**'
+            m3:
+              - 'modules/m3-chunk-embed/**'
+              - 'packages/shared-py/**'
+            m4:
+              - 'modules/m4-rag/**'
+              - 'packages/shared-py/**'
+            m5:
+              - 'modules/m5-gateway/**'
+              - 'packages/shared-py/**'
+            m7-be:
+              - 'modules/m7-admin/backend/**'
+              - 'packages/shared-py/**'
+            m7-fe:
+              - 'modules/m7-admin/frontend/**'
+            m6:
+              - 'modules/m6-ui/**'
+            m8:
+              - 'modules/m8-web-search/**'
+              - 'packages/shared-py/**'
+
+  # ─── Build + push per changed module ───────────────────────────────────────
+  build-push:
+    needs: detect-changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: m1-identity
+            context: modules/m1-identity
+            changed: ${{ needs.detect-changes.outputs.m1 }}
+          - name: m2-doc-to-md
+            context: modules/m2-doc-to-md
+            changed: ${{ needs.detect-changes.outputs.m2 }}
+          - name: m3-chunk-embed
+            context: modules/m3-chunk-embed
+            changed: ${{ needs.detect-changes.outputs.m3 }}
+          - name: m4-rag
+            context: modules/m4-rag
+            changed: ${{ needs.detect-changes.outputs.m4 }}
+          - name: m5-gateway
+            context: modules/m5-gateway
+            changed: ${{ needs.detect-changes.outputs.m5 }}
+          - name: m7-be
+            context: modules/m7-admin/backend
+            changed: ${{ needs.detect-changes.outputs.m7-be }}
+          - name: m7-fe
+            context: modules/m7-admin/frontend
+            changed: ${{ needs.detect-changes.outputs.m7-fe }}
+          - name: m6-ui
+            context: modules/m6-ui
+            changed: ${{ needs.detect-changes.outputs.m6 }}
+          - name: m8-web-search
+            context: modules/m8-web-search
+            changed: ${{ needs.detect-changes.outputs.m8 }}
+    steps:
+      - if: matrix.changed == 'true'
+        uses: actions/checkout@v4
+
+      - if: matrix.changed == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - if: matrix.changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - if: matrix.changed == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/rag-${{ matrix.name }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.OWNER }}/rag-${{ matrix.name }}:main
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

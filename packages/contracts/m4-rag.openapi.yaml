@@ -1,0 +1,82 @@
+openapi: "3.1.0"
+info:
+  title: M4 RAG Engine
+  version: "0.1.0"
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  module:
+                    type: string
+                    example: m4-rag
+  /rag/query:
+    post:
+      summary: Run RAG query
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                top_k:
+                  type: integer
+                  default: 5
+                session_id:
+                  type: string
+                  default: ""
+                use_web:
+                  type: boolean
+                  default: false
+                web_provider:
+                  type: string
+                  enum: [curated, brave, exa, searxng, mock]
+                  nullable: true
+      responses:
+        "200":
+          description: Answer with sources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                  sources:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        doc_id:
+                          type: string
+                        score:
+                          type: number
+                        excerpt:
+                          type: string
+                        type:
+                          type: string
+                          enum: [internal, web]
+                        title:
+                          type: string
+                          nullable: true
+                        url:
+                          type: string
+                          nullable: true
+                  web_search:
+                    type: object
+                    nullable: true
+                    additionalProperties: true

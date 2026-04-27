@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST='{"components/MessageList.tsx -> react-markdown":{"id":7368,"files":["static/chunks/368.7381e474924c662d.js"]}}';

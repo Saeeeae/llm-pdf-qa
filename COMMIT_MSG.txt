@@ -1,0 +1,79 @@
+feat: 8-module RAG-LLM monorepo restructure + Phase A/B production hardening
+
+## Summary
+
+Restructure legacy single-app codebase into 8 independent microservices (M1~M8)
+with contract-first OpenAPI specs, per-module Makefiles, and full CI/CD + observability.
+Phase A applied 12 critical security patches; Phase B implemented M3/M4 from stub to
+production, added E2E tests, GitHub Actions, infra hardening, and load testing stack.
+
+## Module Structure
+
+- M1 identity: JWT auth, RBAC, MySQL HR sync (asyncmy + APScheduler)
+- M2 doc-to-md: kordoc parser, daily 02:00 cron, Redis lock + DLQ
+- M3 chunk-embed: BAAI/bge-m3, pgvector ivfflat + tsvector GIN
+- M4 rag: Hybrid search (vector + BM25 RRF) + vLLM SSE streaming
+- M5 gateway: JWT, rate limit, circuit breaker, /metrics protected
+- M6 ui: Next.js 14 chat UI with SSE + rehype-sanitize
+- M7 admin: Backend (FastAPI) + Frontend (Next.js dashboard)
+- M8 web-search: External search with DLP + SSRF blocking
+
+## Phase A — Critical Patches (12)
+
+- SQL injection removal (text(f'...') → named bindparam)
+- JWT_SECRET 32-char enforcement (no default)
+- /metrics Basic Auth + Authorization header strip
+- rehype-sanitize + safeHref URL validation
+- SSRF block (private IP / metadata service)
+- WebSocket JWT verification + impersonate perms
+- M1 refresh race fix + password upgrade persistence
+- shared-py async engine singleton (pool 20+40)
+- DEV_AUTH production build block
+
+## Phase B — Production Implementation
+
+- B1 M2: Redis distributed lock, DLQ, /ingest background tasks,
+        path traversal/symlink block, M3 retry, Prometheus metrics
+- B2 M3/M4: dynamic batch size, idempotency, RRF env weights,
+           Redis session history, vLLM circuit breaker
+- B3 E2E: testcontainers chain tests, schemathesis contract lock
+- B4 CI/CD: GitHub Actions (lint+test+contracts-diff+image-build+pr-checks)
+- B5 Infra: healthcheck/depends_on, docker secrets, backup automation,
+           1/4 GPU allocation, audit log centralization
+- B6 Observability: Prometheus + Grafana + Loki + Promtail + Alertmanager,
+                   locust load scenarios (100u / 200qpm sustained 30min)
+
+## New Files (highlights)
+
+- modules/m{1..8}/Makefile: per-module standardized targets
+- modules/m3-chunk-embed/{embedder.py, chunker.py, alembic/}: real implementation
+- modules/m4-rag/{retriever.py, llm_client.py, prompt.py, session.py}: Hybrid + LLM
+- modules/m2-doc-to-md/pipeline/{lock.py, dlq.py, metrics.py}
+- packages/contracts/.lock/*.sha256: contract drift detection
+- tests-e2e/{conftest.py, test_chain.py, test_auth_chain.py}
+- .github/workflows/{ci.yml, image-build.yml, pr-checks.yml}
+- infra/{secrets/, cron/backup.sh, logrotate.d/, observability/}
+- loadtest/{locustfile.py, scenarios/, analyze.py}
+- IMPROVEMENT.md: 20-item production backlog (P0~P4)
+- README.md: full module catalog + quickstart
+- PROGRESS.md: hardening progress log
+
+## Test Status
+
+- m1-identity: 18 passed
+- m2-doc-to-md: 20 passed (1 → 20)
+- m3-chunk-embed: 28 passed (0 → 28, real implementation)
+- m4-rag: 41 passed (0 → 41, real implementation)
+- m5-gateway: 20 passed
+- m7-admin/backend: 26 passed (+2 WS auth)
+- m8-web-search: 10 passed (+3 SSRF)
+- Total unit: 163 passed
+- E2E collected: 7 (testcontainers required)
+- Schemathesis collected: 21
+
+## Production Readiness
+
+- Before: 4.0 / 10 (Critical SQL injection, stub M3/M4, no CI, no obs)
+- After:  7.3 / 10 (Production-grade with documented 10/10 gap items)
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>

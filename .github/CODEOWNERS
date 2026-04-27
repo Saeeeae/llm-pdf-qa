@@ -1,0 +1,14 @@
+# Default owner for everything
+* @sae
+
+# Module owners
+modules/m1-identity/ @sae
+modules/m2-doc-to-md/ @sae
+modules/m3-chunk-embed/ @sae
+modules/m4-rag/ @sae
+modules/m5-gateway/ @sae
+modules/m6-ui/ @sae
+modules/m7-admin/ @sae
+modules/m8-web-search/ @sae
+packages/ @sae
+.github/ @sae

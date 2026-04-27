@@ -1,0 +1,52 @@
+openapi: "3.1.0"
+info:
+  title: M3 Chunk/Embed
+  version: "0.1.0"
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  module:
+                    type: string
+                    example: m3-chunk-embed
+  /chunk-embed:
+    post:
+      summary: Chunk and embed a document
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doc_id, markdown_path]
+              properties:
+                doc_id:
+                  type: string
+                markdown_path:
+                  type: string
+      responses:
+        "200":
+          description: Embedding complete
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  doc_id:
+                    type: string
+                  chunks:
+                    type: integer
+                  status:
+                    type: string
+                    example: done

@@ -1,0 +1,8 @@
+/var/log/rag-audit/*.jsonl {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    copytruncate
+}

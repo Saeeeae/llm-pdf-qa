@@ -1,1285 +1,352 @@
-# On-Premise RAG-LLM 사내 AI 어시스턴트 v2
+# RAG-LLM Enterprise Monorepo
 
-사내 문서(PDF, DOCX, XLSX, PPTX, 이미지)를 기반으로 **ChatGPT/Claude 수준의 UX**를 제공하는 완전 온프레미스 AI 어시스턴트.
-외부 API(OpenAI, Anthropic 등) 미사용 — 보안 최우선. 3-프로젝트 모노레포 구조.
-
-현재 기준 문서는 이 파일과 [flowcharts.md](/Users/sae/Desktop/llm_again/docs/flowcharts.md), [2026-03-17-multimodal-rag-execution-plan.md](/Users/sae/Desktop/llm_again/docs/plans/2026-03-17-multimodal-rag-execution-plan.md)입니다. 과거 설계/구현 초안 문서는 정리했습니다.
+문서 기반 RAG (Retrieval-Augmented Generation) 시스템 — 8개 모듈로 분리된 마이크로서비스.  
+한국어 + 영어 문서 (PDF, Word, Excel, HWP, PPT) → 임베딩 → 하이브리드 검색 → LLM 답변.
 
 ---
 
-## 아키텍처
-
-```mermaid
-graph TB
-    subgraph Client
-        FE[Next.js Frontend :3000]
-    end
-
-    subgraph rag-serving
-        API[Serving API :8002]
-        VLLM[vLLM Qwen2.5-72B :8000]
-    end
-
-    subgraph rag-pipeline
-        PAPI[Pipeline API :8001]
-        WORKER[Celery Worker]
-        MINERU[MinerU OCR :9000]
-    end
-
-    subgraph rag-sync-monitor
-        SCHED[Cron Scheduler]
-        DASH[Streamlit Dashboard :8003]
-    end
-
-    subgraph Infrastructure
-        PG[(PostgreSQL 16 + pgvector)]
-        NEO[(Neo4j 5 + APOC)]
-        REDIS[(Redis 7)]
-    end
-
-    FE -->|REST + SSE| API
-    API -->|OpenAI-compat| VLLM
-    API -->|Hybrid Search| PG
-    API -->|Graph Context| NEO
-    API -->|Session Cache| REDIS
-
-    PAPI -->|Task Queue| WORKER
-    WORKER -->|OCR Parse| MINERU
-    WORKER -->|Embed + Index| PG
-    WORKER -->|Graph Extract| NEO
-    WORKER -->|Broker| REDIS
-
-    SCHED -->|File Scan| PAPI
-    DASH -->|Read Stats| PG
-```
+## 목차
+1. [시스템 개요](#1-시스템-개요)
+2. [모듈 구성](#2-모듈-구성)
+3. [빠른 시작](#3-빠른-시작)
+4. [모듈별 동작](#4-모듈별-동작)
+5. [개발 워크플로](#5-개발-워크플로)
+6. [배포](#6-배포)
+7. [관측성](#7-관측성)
+8. [운영 환경 사양](#8-운영-환경-사양)
+9. [디렉토리 구조](#9-디렉토리-구조)
+10. [기여](#10-기여)
+11. [라이선스](#11-라이선스)
 
 ---
 
-## 기술 스택
+## 1. 시스템 개요
 
-| 레이어 | 기술 | 비고 |
-|--------|------|------|
-| Frontend | Next.js 16 (App Router, TypeScript, Tailwind) | 채팅 UI, 로그인, 관리자 |
-| Backend | FastAPI (Python 3.11, sync SQLAlchemy) | rag-serving + rag-pipeline |
-| LLM | vLLM + Qwen2.5-72B-Instruct-AWQ | OpenAI-compatible API |
-| Embedding | BAAI/bge-m3 (1024-dim) | Dense + Sparse 지원 |
-| Reranker | BAAI/bge-reranker-v2-m3 | Cross-encoder |
-| Vector + RDBMS | PostgreSQL 16 + pgvector (HNSW) + tsvector | Hybrid Search (Dense + Sparse + RRF) |
-| Graph DB | Neo4j 5 + APOC | GraphRAG (NER + 2-hop context) |
-| Task Queue | Celery + Redis 7 | 비동기 파이프라인 처리 |
-| OCR | MinerU (RAG-Anything) | PDF/이미지 파싱 |
-| Monitoring | Streamlit | 동기화/처리 대시보드 |
-| Container | Docker Compose | 모노레포 오케스트레이션 |
-
----
-
-## 모노레포 구조
+### 1.1 아키텍처
 
 ```
-llm_again/
-├── shared/                          # 공유 모듈
-│   ├── sql/init.sql                 #   PostgreSQL DDL (운영 스키마)
-│   ├── models/
-│   │   ├── orm.py                   #   SQLAlchemy ORM 모델
-│   │   └── registry.py             #   ML 모델 레지스트리
-│   ├── config.py                    #   Pydantic 공통 설정
-│   └── db.py                        #   DB 연결 헬퍼
-│
-├── rag-pipeline/                    # 문서 수집/파싱/임베딩 파이프라인
-│   ├── api/main.py                  #   Pipeline API (FastAPI)
-│   ├── pipeline/
-│   │   ├── scanner.py               #   파일 시스템 스캐너
-│   │   ├── parser.py                #   MinerU 파서
-│   │   ├── chunker.py               #   Hybrid 청킹
-│   │   ├── embedder.py              #   BGE-M3 임베딩
-│   │   ├── indexer.py               #   pgvector 인덱싱
-│   │   ├── graph_extractor.py       #   Neo4j 엔티티 추출
-│   │   └── orchestrator.py          #   파이프라인 오케스트레이터
-│   ├── tasks/
-│   │   ├── celery_app.py            #   Celery 앱 설정
-│   │   └── pipeline_tasks.py        #   비동기 처리 태스크
-│   └── config.py                    #   Pipeline 설정
-│
-├── rag-serving/                     # RAG 질의응답 + 인증 + 관리
-│   ├── api/
-│   │   ├── main.py                  #   Serving API (FastAPI + CORS)
-│   │   ├── routers/
-│   │   │   ├── auth.py              #   인증 (JWT login/refresh/logout)
-│   │   │   ├── chat.py              #   채팅 (SSE 스트리밍)
-│   │   │   └── admin.py             #   관리자 (사용자/문서/설정)
-│   │   ├── auth/                    #   JWT + bcrypt 인증 모듈
-│   │   └── rag/
-│   │       ├── retriever.py         #   Hybrid Search (Dense + Sparse + RRF)
-│   │       ├── reranker.py          #   BGE-reranker-v2-m3
-│   │       ├── graph_retriever.py   #   Neo4j Graph Context
-│   │       └── generator.py         #   vLLM SSE 스트리밍
-│   ├── admin/index.html             #   관리자 대시보드 (Vanilla HTML)
-│   ├── vllm/start_vllm.sh          #   vLLM 시작 스크립트
-│   └── config.py                    #   Serving 설정
-│
-├── rag-sync-monitor/                # 파일/사용자 동기화 + 모니터링
-│   ├── sync/
-│   │   ├── file_syncer.py           #   파일 동기화
-│   │   ├── user_syncer.py           #   사용자 동기화
-│   │   └── change_detector.py       #   변경 감지
-│   ├── trigger/
-│   │   └── pipeline_trigger.py      #   rag-pipeline API 호출
-│   ├── scheduler/cron_sync.py       #   APScheduler 크론
-│   └── dashboard/app.py             #   Streamlit 대시보드
-│
-├── mineru/                          # MinerU OCR 마이크로서비스
-│   ├── mineru_api.py                #   FastAPI 파싱 서버
-│   └── requirements.txt             #   MinerU 런타임 의존성
-│
-├── frontend/                        # Next.js 프론트엔드
-│   ├── app/                         #   App Router (login, chat, admin)
-│   ├── components/                  #   React 컴포넌트
-│   └── lib/                         #   API 클라이언트, 인증 상태
-│
-├── docker-compose.yml               # 루트 오케스트레이션
-├── docker-compose.base.yml          # 인프라 서비스 (PG, Neo4j, Redis)
-├── Dockerfile.mineru                # MinerU 컨테이너
-├── Makefile                         # 편의 명령어
-└── .env.example                     # 환경변수 템플릿
+        [Documents]
+            ↓
+   ┌────────────────┐  daily 02:00 (APScheduler)
+   │ M2 doc-to-md   │ ── kordoc ──> Markdown files
+   └────────┬───────┘
+            ↓ HTTP
+   ┌────────────────┐
+   │ M3 chunk-embed │ ── BAAI/bge-m3 ──> PostgreSQL (pgvector + tsvector)
+   └────────────────┘                              ↑
+                                                   │ SELECT
+   [User]                                          │
+     ↓                                             │
+   M6 UI ── M5 Gateway ──> M4 RAG ─────────────────┘
+              │                ↓
+              ├─> M1 Identity  vLLM (OpenAI 호환)
+              ├─> M7 Admin
+              └─> M8 Web Search
 ```
 
----
+### 1.2 핵심 기능
 
-## 포트 매핑
-
-| 서비스 | 컨테이너 | 포트 | 설명 |
-|--------|---------|------|------|
-| `vllm-server` | rag-vllm | 8000 | vLLM OpenAI-compatible API (GPU) |
-| `pipeline-api` | rag-pipeline-api | 8001 | 문서 처리 파이프라인 API |
-| `serving-api` | rag-serving-api | 8002 | RAG 질의응답 + 인증 API |
-| `sync-dashboard` | rag-sync-dashboard | 8003 | Streamlit 모니터링 대시보드 |
-| `frontend` | rag-frontend | 3000 | Next.js UI |
-| `postgres` | rag-postgres | 5432 | PostgreSQL 16 + pgvector |
-| `neo4j` | rag-neo4j | 7474 / 7687 | Neo4j Browser / Bolt |
-| `redis` | rag-redis | 6379 | Redis (Celery 브로커) |
-| `mineru-api` | rag-mineru-api | 9000 | MinerU OCR/PDF 파싱 |
+| 기능 | 내용 |
+|------|------|
+| 하이브리드 검색 | pgvector (cosine) + tsvector (BM25) + RRF fusion |
+| 인증 | JWT HS256, refresh rotation + theft detection, argon2id |
+| 외부 동기화 | MySQL HR 시스템 → M1 Postgres, 60분 주기 pull |
+| 관측성 | Prometheus + Grafana + Loki + Alertmanager |
+| Mock 토글 | `MODULE_IMPL=mock` / `NEXT_PUBLIC_USE_MOCKS=1` |
 
 ---
 
-## DB ERD
+## 2. 모듈 구성
 
-Phase 2 기준 핵심 ERD는 아래 구조입니다. 문서는 `document -> doc_block -> doc_chunk` 순으로 구조화되고, 이미지와 그래프/채팅 참조가 연결됩니다.
+| 모듈 | 책임 | 주요 기술 | 포트 |
+|------|------|----------|------|
+| **M1 identity** | 사용자, 인증, RBAC, MySQL 동기화 | FastAPI, asyncpg, asyncmy, APScheduler | 8001 |
+| **M2 doc-to-md** | 문서 → Markdown 변환 (cron 02:00) | kordoc, APScheduler, Redis lock | 8002 |
+| **M3 chunk-embed** | 청킹 + bge-m3 임베딩 + pgvector 저장 | sentence-transformers, asyncpg | 8003 |
+| **M4 rag** | 하이브리드 검색 + vLLM 스트리밍 | pgvector, RRF, vLLM | 8004 |
+| **M5 gateway** | 라우팅, 인증, rate limit, circuit breaker | httpx, Redis | 8005 |
+| **M6 ui** | 사용자 채팅 UI | Next.js 14, TypeScript, SSE | 3000 |
+| **M7 admin** | 관리자 대시보드 (BE + FE) | FastAPI + Next.js | 8007 / 3001 |
+| **M8 web-search** | 외부 검색 + DLP + SSRF 차단 | httpx, ipaddress | 8008 |
 
-```mermaid
-erDiagram
-    DEPARTMENT ||--o{ USERS : has
-    ROLES ||--o{ USERS : grants
-    DOC_FOLDER ||--o{ DOCUMENT : contains
-    DEPARTMENT ||--o{ DOCUMENT : owns
-    ROLES ||--o{ DOCUMENT : protects
-
-    DOCUMENT ||--o{ DOC_IMAGE : has
-    DOCUMENT ||--o{ DOC_BLOCK : has
-    DOCUMENT ||--o{ DOC_CHUNK : has
-    DOCUMENT ||--o{ GRAPH_ENTITIES : has
-    DOCUMENT ||--o{ PIPELINE_LOGS : logs
-
-    DOC_BLOCK ||--o{ DOC_CHUNK : originates
-    DOC_BLOCK ||--o| DOC_IMAGE : links
-    DOC_BLOCK ||--o{ DOC_BLOCK : parent_child
-
-    DOC_CHUNK ||--o{ DOC_KEYWORD : indexes
-    CHAT_SESSION ||--o{ CHAT_MSG : contains
-    CHAT_MSG ||--o{ MSG_REF : cites
-    DOCUMENT ||--o{ MSG_REF : referenced_by
-    DOC_CHUNK ||--o{ MSG_REF : referenced_chunk
-
-    USERS ||--o{ QUERY_LOGS : asks
-    CHAT_SESSION ||--o{ QUERY_LOGS : records
-    USERS ||--o{ AUDIT_LOG : audits
-    USERS ||--o{ EVENT_LOG : emits
-    DOCUMENT ||--o{ EVENT_LOG : traces
-
-    DOCUMENT {
-        int doc_id PK
-        int folder_id FK
-        string file_name
-        string type
-        string status
-        int total_page_cnt
-    }
-    DOC_BLOCK {
-        int block_id PK
-        int doc_id FK
-        int block_idx
-        string block_type
-        int page_number
-        string sheet_name
-        int slide_number
-        string section_path
-        text source_text
-        int parent_block_id FK
-        int image_id FK
-    }
-    DOC_CHUNK {
-        int chunk_id PK
-        int doc_id FK
-        int block_id FK
-        int chunk_idx
-        string chunk_type
-        int page_number
-    }
-    DOC_IMAGE {
-        int image_id PK
-        int doc_id FK
-        int page_number
-        string image_path
-    }
-```
-
-전체 서비스 흐름도는 [flowcharts.md](/Users/sae/Desktop/llm_again/docs/flowcharts.md)에 정리되어 있습니다.
+각 모듈은 자체 OpenAPI 스펙을 `packages/contracts/` 에 보유 (M6 제외).
 
 ---
 
-## 빠른 시작
+## 3. 빠른 시작
 
-### 1. 환경 설정
+### 3.1 사전 준비
+
+- Docker 24.0+ + Docker Compose v2
+- Python 3.11+
+- Node.js 20+ (M6, M7 frontend)
+- (선택) NVIDIA Container Toolkit — GPU 사용 시
+
+### 3.2 Secrets 생성
 
 ```bash
-git clone <repository-url>
-cd llm_again
-make init
+mkdir -p infra/secrets
+for n in jwt_secret postgres_password neo4j_password grafana_password; do
+  openssl rand -base64 48 > infra/secrets/$n
+  chmod 600 infra/secrets/$n
+done
 ```
 
-`.env` 파일에서 반드시 변경할 항목:
-
-```ini
-POSTGRES_PASSWORD=your_secure_password
-NEO4J_PASSWORD=your_neo4j_password
-JWT_SECRET=your-very-secret-key-minimum-32-characters
-DOC_WATCH_DIR=/path/to/your/documents
-```
-
-### 2. 서비스 실행
-
-기본 운영 경로는 Docker Compose입니다. 이 프로젝트는 전체 스택을 컨테이너 기준으로 맞춰두었고, 로컬 실행은 개발 편의를 위한 보조 경로입니다.
+### 3.3 환경변수 설정
 
 ```bash
-# 전체 서비스
-make up
+cp .env.example .env
+# 필수: POSTGRES_URL, REDIS_URL, JWT_SECRET (32자+), VLLM_URL
+```
 
-# macOS / Apple Silicon 로컬 smoke (MinerU 제외)
-make up-local
+### 3.4 전체 스택 기동
 
-# 프론트 / 관리자 UI만 빠르게 확인
-make up-local-ui
+```bash
+make bootstrap      # 백엔드 모듈 + shared-py editable 설치
+make install-fe     # Frontend npm install
+make migrate        # Alembic 스키마 적용 (M1, M3)
+make up             # 전체 스택 (Postgres + Redis + 8 modules)
+```
 
-# GPU 포함 (vLLM)
-make up-gpu
+기동 확인:
 
-# 인프라만 (PostgreSQL, Neo4j, Redis)
-make up-infra
-
-# 상태 확인
+```bash
 make ps
+curl http://localhost:8005/health   # M5 gateway
+curl http://localhost:3000          # M6 UI
 ```
 
-### 3. 첫 관리자 계정 생성
+### 3.5 Mock 모드 (DB/모델 없이)
 
 ```bash
-docker compose exec -T serving-api python3 - <<'PY'
-from rag_serving.api.auth.password import hash_password
-from shared.models.orm import User
-from shared.db import get_session
-
-email = "admin@company.com"
-password = "change_me_admin_password"
-
-with get_session() as s:
-    user = s.query(User).filter(User.email == email).first()
-    if not user:
-        s.add(User(
-            pwd=hash_password(password),
-            usr_name="관리자",
-            email=email,
-            dept_id=1,
-            role_id=1,
-        ))
-        print("관리자 계정 생성 완료:", email)
-    else:
-        user.pwd = hash_password(password)
-        user.is_active = True
-        print("기존 관리자 계정 비밀번호 갱신 완료:", email)
-PY
+make up-mock   # MODULE_IMPL=mock 전체, 인프라(PG/Redis)만 실제
 ```
-
-### 4. 접속
-
-| URL | 서비스 |
-|-----|--------|
-| http://localhost:3000 | 채팅 UI (로그인 후 사용) |
-| http://localhost:3000/admin | Next.js 관리자 운영 콘솔 |
-| http://localhost:8002/docs | Serving API Swagger |
-| http://localhost:8001/docs | Pipeline API Swagger |
-| http://localhost:8003 | Sync/Monitor 대시보드 |
-| http://localhost:7474 | Neo4j Browser |
 
 ---
 
-## Phase 0 확인 절차
+## 4. 모듈별 동작
 
-### 1. Docker 기반 실행 확인
-
-```bash
-make up
-make ps
-```
-
-GPU 서버에서 vLLM까지 함께 올릴 경우:
+### 4.1 공통 패턴 (백엔드 M1/M2/M3/M4/M5/M7-BE/M8)
 
 ```bash
-make up-gpu
-make ps
+cd modules/<module-name>
+make help          # 타깃 목록
+make install       # shared-py + 모듈 editable 설치
+make run / run-mock / test / test-cov / lint / fmt / build / clean
 ```
 
-개발용 smoke 검증만 먼저 하고 싶다면 `.env`에서 아래 값을 사용할 수 있습니다.
+### 4.2 모듈별 특이사항
 
-```ini
-EMBEDDING_DEVICE=cpu
-RERANKER_DEVICE=cpu
-SMOKE_TEST_MODE=true
-VLLM_BASE_URL=mock://local
-```
-
-이 모드에서는 임베딩/리랭커/생성 단계가 개발용 fallback으로 동작하므로, GPU와 실제 모델 없이도 Phase 0의 관리자/검색/채팅 경로를 검증할 수 있습니다.
-
-맥북 M2 같은 로컬 개발 환경에서는 아래처럼 로컬 override를 함께 사용하는 편이 안정적입니다.
-
+**M1 identity** (포트 8001)
 ```bash
-make up-local
-make ps-local
+cd modules/m1-identity
+make migrate                       # 7개 테이블 + 역할 시드
+make migrate-new name="add_xxx"    # 새 migration 생성
+make run
+# MySQL 동기화 1회 수동 실행
+curl -X POST http://localhost:8001/admin/sync/mysql \
+  -H "Authorization: Bearer <admin_token>"
 ```
 
-`make up-local`은 로컬 smoke 기준으로 MinerU를 제외한 핵심 스택만 올립니다. 프론트와 관리자 화면만 빠르게 확인하려면 `make up-local-ui`를 사용하면 됩니다.
-
-운영 배포 기준은 Ubuntu 24.04 + Intel Xeon + NVIDIA L40S이며, 이 경우에는 기본 `docker-compose.yml` 경로를 사용합니다.
-
-### Docker Build 참고
-
-Dockerfile들은 `DEBIAN_FRONTEND=noninteractive`, `TZ=Etc/UTC`를 사용하도록 맞춰 두었습니다. Ubuntu 계열 이미지 빌드 중 지역/시간 선택 프롬프트가 뜨며 멈추던 문제를 피하기 위한 설정입니다.
-
-### Phase 0 재검증 체크리스트
-
-- `make ps` 또는 `make ps-local`에서 `postgres`, `redis`, `pipeline-api`, `pipeline-worker`, `serving-api`, `sync-scheduler`, `frontend`가 `Up` 상태인지 확인
-- `document`, `pipeline_logs`, `sync_logs` 테이블이 실제로 존재하는지 확인
-- 샘플 문서가 `document.status='indexed'`로 들어왔는지 확인
-- `pipeline_logs`에 `mineru_parse -> chunk -> embed -> index -> graph_extract` 성공 이력이 남는지 확인
-- `http://localhost:3000` 로그인과 `http://localhost:3000/admin` 접근이 되는지 확인
-- 관리자 화면 문서 상세에서 `block_count`, `chunk_count`, `entity_count`, 최근 파이프라인 로그가 보이는지 확인
-- 채팅 세션 생성 후 문서 reference가 포함된 응답이 나오는지 확인
-- PDF 또는 이미지 문서를 넣었을 때 `doc_image`와 `IMAGE_STORE_DIR` 아래에 산출물이 남는지 확인
-- Neo4j Browser 로그인 시 `.env`의 `NEO4J_PASSWORD`로 접속되는지 확인
-
-### 2. 샘플 문서 sync / pipeline 확인
-
-샘플 문서가 `DOC_WATCH_DIR`에 있다면 `sync-scheduler`가 시작 시 1회 자동 동기화를 수행합니다.
-
+**M2 doc-to-md** (포트 8002)
 ```bash
-docker compose exec -T postgres psql -U admin -d rag_system -c "
-select doc_id, file_name, status, error_msg, total_page_cnt
-from document
-order by doc_id;
-"
-
-docker compose exec -T postgres psql -U admin -d rag_system -c "
-select id, doc_id, stage, status, started_at, finished_at
-from pipeline_logs
-order by id desc
-limit 20;
-"
+cd modules/m2-doc-to-md
+make pipeline       # 점진적 1회 실행
+make pipeline-full  # 강제 전체 재처리
+make run            # HTTP API + APScheduler 02:00 cron 기동
 ```
 
-재처리가 필요하면:
-
+**M3 chunk-embed** (포트 8003)
 ```bash
-docker compose exec -T pipeline-api curl -sS \
-  -X POST http://localhost:8001/pipeline/trigger \
+cd modules/m3-chunk-embed
+make migrate    # pgvector ext + chunks/documents 테이블 + ivfflat 인덱스
+make run        # 첫 요청 시 BAAI/bge-m3 자동 fetch (인터넷 필요)
+```
+
+**M4 rag** (포트 8004) — vLLM 서버 필요
+```bash
+# vLLM 별도 기동 예시
+docker run --gpus all -p 8000:8000 vllm/vllm-openai:latest \
+  --model Qwen/Qwen2.5-7B-Instruct
+
+cd modules/m4-rag
+VLLM_URL=http://localhost:8000/v1 make run
+
+# SSE 스트리밍 테스트
+curl -N -X POST "http://localhost:8004/rag/query?stream=1" \
   -H 'Content-Type: application/json' \
-  -d '{"doc_ids":[1]}'
+  -d '{"query": "...", "top_k": 5}'
 ```
 
-### 3. 관리자 계정 생성
-
-위의 "첫 관리자 계정 생성" 절차를 실행한 뒤 로그인합니다.
-
-### 4. 관리자 콘솔 확인
-
-1. `http://localhost:3000`에서 관리자 계정으로 로그인합니다.
-2. `http://localhost:3000/admin`으로 이동합니다.
-3. 아래 항목이 정상 동작하는지 확인합니다.
-
-- 운영 개요 카드가 로드되고 마지막 갱신 시간이 표시된다.
-- 문서 탭에서 상태 필터와 검색이 동작한다.
-- 문서 행 클릭 시 우측 드로어에서 문서 상세와 최근 파이프라인 이력이 열린다.
-- 파이프라인 탭에서 상태/스테이지 필터가 동작한다.
-- 파이프라인 행 클릭 시 우측 상세 패널에서 오류 메시지와 metadata를 확인할 수 있다.
-- 운영 개요의 실패/실행중/모듈 카드 클릭 시 문서 또는 파이프라인 탭으로 drill-down 된다.
-
-### 5. API / 채팅 smoke 확인
-
-호스트에서 직접 호출해도 되고, 로컬 환경 제약이 있으면 컨테이너 내부에서 호출해도 됩니다.
-
+**M5 gateway** (포트 8005) — 외부 진입점
 ```bash
-docker compose exec -T serving-api python3 - <<'PY'
-import json
-import httpx
-
-base = "http://localhost:8002"
-creds = {"email": "admin@company.com", "password": "change_me_admin_password"}
-
-with httpx.Client(timeout=60.0) as client:
-    login = client.post(f"{base}/api/v1/auth/login", json=creds)
-    login.raise_for_status()
-    token = login.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    print("system-summary:", client.get(f"{base}/api/v1/admin/system-summary", headers=headers).json())
-
-    session = client.post(
-        f"{base}/api/v1/chat/sessions",
-        headers=headers,
-        json={"title": "phase0 smoke"},
-    ).json()
-
-    with client.stream(
-        "POST",
-        f"{base}/api/v1/chat/sessions/{session['session_id']}/stream",
-        headers=headers,
-        json={
-            "message": "Project Atlas와 EGFR, NSCLC를 요약해줘",
-            "search_scope": "all",
-            "use_web_search": False,
-        },
-    ) as response:
-        response.raise_for_status()
-        for line in response.iter_lines():
-            if line and line.startswith("data: "):
-                print(line)
-PY
+cd modules/m5-gateway
+make run   # 모든 사용자 요청은 :8005 경유
 ```
 
-### 6. 정적 검증
-
+**M6 ui** (포트 3000) — 사용자 채팅
 ```bash
-python3 -m py_compile rag-serving/api/routers/admin.py
-python3 -m pytest tests/test_import_aliases.py -q
-frontend/node_modules/.bin/tsc --noEmit -p frontend/tsconfig.json
+cd modules/m6-ui
+make install
+make run                          # localhost:3000 (real mode)
+NEXT_PUBLIC_USE_MOCKS=1 npm run dev  # MSW mock mode (백엔드 불필요)
+make build                        # 프로덕션 빌드
 ```
 
-참고:
-
-- 프론트 ESLint는 현재 레포에 `eslint.config.js`가 없어 직접 실행 시 실패할 수 있습니다.
-- Streamlit 운영 대시보드는 `http://localhost:8003`, Next.js 관리자 콘솔은 `http://localhost:3000/admin`입니다.
-
-### 7. 트러블슈팅
-
-- `sync_logs`, `pipeline_logs` 등 일부 테이블이 없다고 나오면 기존 PostgreSQL 볼륨에 오래된 스키마가 남아 있는 경우가 많습니다. `make db-reset` 또는 PostgreSQL 데이터 디렉터리 초기화 후 다시 시작하세요.
-- `FATAL: database "admin" does not exist`는 잘못된 `psql` 접속 또는 오래된 healthcheck 로그일 가능성이 큽니다. 현재 기본 DB 이름은 `rag_system`입니다.
-- Neo4j 비밀번호를 바꿨는데 로그인이 안 되면 기존 `data/neo4j` 볼륨에 이전 자격 증명이 남아 있는 경우가 흔합니다. 이때는 볼륨을 초기화하고 다시 기동하세요.
-- macOS / Apple Silicon에서는 기본 `make up`보다 `make up-local` 경로가 안정적입니다.
-- DOCX/XLSX/PPTX는 MinerU를 거치지 않고 로컬 파서가 처리합니다. MinerU 경로를 확인하려면 PDF 또는 이미지 파일을 테스트하세요.
-
----
-
-## Makefile 명령어
-
+**M7 admin** — Backend + Frontend 분리
 ```bash
-make help           # 전체 명령어 목록
+cd modules/m7-admin/backend  && make run   # 포트 8007
+cd modules/m7-admin/frontend && make run   # 포트 3001
+```
 
-# Docker Compose
-make up             # 전체 서비스 시작 (CPU)
-make up-gpu         # 전체 서비스 시작 (GPU 포함)
-make up-infra       # 인프라만 시작
-make up-pipeline    # Pipeline 서비스만 시작
-make up-serving     # Serving 서비스만 시작
-make up-sync        # Sync/Monitor만 시작
-make down           # 전체 중지
-make restart        # 재시작
-make build          # 이미지 빌드
-make ps             # 컨테이너 상태
-
-# 로그
-make logs           # 전체 로그
-make logs-pipeline  # Pipeline 로그
-make logs-serving   # Serving 로그
-make logs-vllm      # vLLM 로그
-make logs-mineru    # MinerU 로그
-
-# 셸 접속
-make shell-pipeline # Pipeline 컨테이너 셸
-make shell-serving  # Serving 컨테이너 셸
-make shell-db       # PostgreSQL psql
-
-# 데이터베이스
-make db-psql        # psql 접속
-make db-reset       # DB 초기화 (주의!)
-
-# 개발
-make dev-infra      # 인프라 + 로컬 개발 가이드
-make test           # 테스트 실행
-make lint           # 린트 실행
-make clean          # 전체 정리 (주의!)
+**M8 web-search** (포트 8008)
+```bash
+cd modules/m8-web-search
+make run
+make search-once Q="p53 phase 2 clinical trial" PROVIDER=curated
+# 선택 provider: curated(기본, offline) | brave | exa | searxng
 ```
 
 ---
 
-## ERD (Entity-Relationship Diagram)
+## 5. 개발 워크플로
 
-PostgreSQL 28 테이블 + 2 뷰. `shared/sql/init.sql` 기준.
+### 5.1 Contract-first
 
-```mermaid
-erDiagram
-    %% ===== Auth Domain =====
-    department {
-        SERIAL dept_id PK
-        INTEGER parent_dept_id FK
-        VARCHAR name UK
-        TIMESTAMP created_at
-    }
+1. `packages/contracts/<m>.openapi.yaml` 수정 (OpenAPI SSOT)
+2. `make contracts-validate` → 모듈 구현 수정 → `make contracts-lock`
 
-    roles {
-        SERIAL role_id PK
-        VARCHAR role_name UK
-        INTEGER auth_level
-        TIMESTAMP created_at
-    }
-
-    users {
-        SERIAL user_id PK
-        TEXT pwd
-        VARCHAR usr_name
-        VARCHAR email UK
-        INTEGER dept_id FK
-        INTEGER role_id FK
-        TIMESTAMP last_login
-        INTEGER failure
-        TIMESTAMP locked_until
-        BOOLEAN is_active
-    }
-
-    refresh_token {
-        SERIAL id PK
-        INTEGER user_id FK
-        TEXT token_hash
-        TIMESTAMP expires_at
-        BOOLEAN revoked
-    }
-
-    user_preference {
-        INTEGER user_id PK
-        JSON preferences
-    }
-
-    %% ===== Document Domain =====
-    doc_folder {
-        SERIAL folder_id PK
-        INTEGER parent_folder_id FK
-        VARCHAR folder_name
-        TEXT folder_path
-        INTEGER dept_id FK
-    }
-
-    folder_access {
-        SERIAL access_id PK
-        INTEGER user_id FK
-        INTEGER folder_id FK
-        BOOLEAN is_recursive
-        TIMESTAMP expires_at
-        BOOLEAN is_active
-    }
-
-    document {
-        SERIAL doc_id PK
-        INTEGER folder_id FK
-        VARCHAR file_name
-        VARCHAR hash UK
-        INTEGER dept_id FK
-        INTEGER role_id FK
-        VARCHAR status
-        TIMESTAMP created_at
-    }
-
-    doc_image {
-        SERIAL image_id PK
-        INTEGER doc_id FK
-        INTEGER page_number
-        TEXT image_path
-    }
-
-    doc_chunk {
-        SERIAL chunk_id PK
-        INTEGER doc_id FK
-        INTEGER chunk_idx
-        TEXT content
-        VECTOR embedding
-        TSVECTOR_ tsv
-        INTEGER image_id FK
-    }
-
-    graph_entities {
-        SERIAL id PK
-        INTEGER doc_id FK
-        TEXT entity_name
-        VARCHAR entity_type
-        TEXT neo4j_node_id
-    }
-
-    %% ===== Chat Domain =====
-    chat_session {
-        SERIAL session_id PK
-        INTEGER ws_id FK
-        INTEGER created_by FK
-        VARCHAR title
-        VARCHAR session_type
-    }
-
-    session_participant {
-        SERIAL id PK
-        INTEGER session_id FK
-        INTEGER user_id FK
-        VARCHAR role
-    }
-
-    chat_msg {
-        SERIAL msg_id PK
-        INTEGER session_id FK
-        INTEGER user_id FK
-        VARCHAR sender_type
-        TEXT message
-    }
-
-    msg_ref {
-        SERIAL ref_id PK
-        INTEGER msg_id FK
-        INTEGER doc_id FK
-        INTEGER chunk_id FK
-        VARCHAR web_url
-        FLOAT relevance_score
-    }
-
-    %% ===== Workspace Domain =====
-    workspace {
-        SERIAL ws_id PK
-        VARCHAR ws_name
-        INTEGER owner_dept_id FK
-        INTEGER created_by FK
-        BOOLEAN is_active
-    }
-
-    ws_permission {
-        SERIAL permission_id PK
-        INTEGER ws_id FK
-        INTEGER user_id FK
-        VARCHAR role
-    }
-
-    ws_invitation {
-        SERIAL invite_id PK
-        INTEGER ws_id FK
-        INTEGER inviter_id FK
-        INTEGER invitee_id FK
-        VARCHAR status
-    }
-
-    access_request {
-        SERIAL req_id PK
-        INTEGER user_id FK
-        INTEGER target_ws_id FK
-        VARCHAR status
-        INTEGER approve_id FK
-    }
-
-    %% ===== Logging Domain =====
-    audit_log {
-        SERIAL log_id PK
-        INTEGER user_id FK
-        VARCHAR action_type
-        VARCHAR target_type
-        INTEGER target_id
-    }
-
-    pipeline_logs {
-        SERIAL id PK
-        INTEGER doc_id FK
-        VARCHAR stage
-        VARCHAR status
-        JSON metadata
-    }
-
-    sync_logs {
-        SERIAL id PK
-        VARCHAR sync_type
-        INTEGER files_added
-        INTEGER files_modified
-        INTEGER files_deleted
-        VARCHAR status
-    }
-
-    query_logs {
-        SERIAL id PK
-        INTEGER user_id FK
-        INTEGER session_id FK
-        TEXT prompt
-        INTEGER latency_ms
-        INTEGER token_count_in
-        INTEGER token_count_out
-    }
-
-    web_search_log {
-        SERIAL id PK
-        INTEGER user_id FK
-        INTEGER session_id FK
-        TEXT query
-        BOOLEAN was_blocked
-    }
-
-    event_log {
-        SERIAL id PK
-        VARCHAR trace_id
-        VARCHAR module
-        VARCHAR event_type
-        VARCHAR severity
-        INTEGER user_id FK
-        INTEGER session_id FK
-        INTEGER doc_id FK
-        TEXT message
-        JSON details
-        INTEGER duration_ms
-        VARCHAR ip_address
-    }
-
-    %% ===== System Domain =====
-    llm_config {
-        SERIAL id PK
-        VARCHAR model_name
-        TEXT system_prompt
-        FLOAT temperature
-        INTEGER max_tokens
-        BOOLEAN is_active
-    }
-
-    system_job {
-        SERIAL job_id PK
-        VARCHAR job_name
-        VARCHAR job_type
-        VARCHAR status
-        JSON config_json
-    }
-
-    system_health {
-        SERIAL id PK
-        VARCHAR service_name
-        VARCHAR status
-        FLOAT response_time_ms
-    }
-
-    %% ===== Relationships =====
-    department ||--o{ department : "parent"
-    department ||--o{ users : "dept_id"
-    roles ||--o{ users : "role_id"
-    users ||--o{ refresh_token : "user_id"
-    users ||--o| user_preference : "user_id"
-
-    department ||--o{ doc_folder : "dept_id"
-    doc_folder ||--o{ doc_folder : "parent"
-    doc_folder ||--o{ document : "folder_id"
-    doc_folder ||--o{ folder_access : "folder_id"
-    users ||--o{ folder_access : "user_id"
-    department ||--o{ document : "dept_id"
-    roles ||--o{ document : "role_id"
-    document ||--o{ doc_image : "doc_id"
-    document ||--o{ doc_chunk : "doc_id"
-    document ||--o{ graph_entities : "doc_id"
-    doc_image ||--o{ doc_chunk : "image_id"
-
-    users ||--o{ chat_session : "created_by"
-    workspace ||--o{ chat_session : "ws_id"
-    chat_session ||--o{ session_participant : "session_id"
-    users ||--o{ session_participant : "user_id"
-    chat_session ||--o{ chat_msg : "session_id"
-    users ||--o{ chat_msg : "user_id"
-    chat_msg ||--o{ msg_ref : "msg_id"
-    document ||--o{ msg_ref : "doc_id"
-    doc_chunk ||--o{ msg_ref : "chunk_id"
-
-    department ||--o{ workspace : "owner_dept_id"
-    users ||--o{ workspace : "created_by"
-    workspace ||--o{ ws_permission : "ws_id"
-    users ||--o{ ws_permission : "user_id"
-    workspace ||--o{ ws_invitation : "ws_id"
-    users ||--o{ ws_invitation : "inviter_id"
-    users ||--o{ ws_invitation : "invitee_id"
-    workspace ||--o{ access_request : "target_ws_id"
-    users ||--o{ access_request : "user_id"
-
-    users ||--o{ audit_log : "user_id"
-    document ||--o{ pipeline_logs : "doc_id"
-    users ||--o{ query_logs : "user_id"
-    chat_session ||--o{ query_logs : "session_id"
-    users ||--o{ web_search_log : "user_id"
-    chat_session ||--o{ web_search_log : "session_id"
-    users ||--o{ event_log : "user_id"
-    chat_session ||--o{ event_log : "session_id"
-    document ||--o{ event_log : "doc_id"
-```
-
-### 도메인별 테이블 요약
-
-| 도메인 | 테이블 수 | 주요 테이블 |
-|--------|-----------|-------------|
-| Auth | 5 | `users`, `department`, `roles`, `refresh_token`, `user_preference` |
-| Document | 6 | `document`, `doc_chunk` (pgvector 1024-dim + tsvector), `doc_image`, `graph_entities` |
-| Chat | 4 | `chat_session`, `chat_msg`, `msg_ref` (문서/웹 참조), `session_participant` |
-| Workspace | 4 | `workspace`, `ws_permission`, `ws_invitation`, `access_request` |
-| Logging | 6 | `audit_log`, `pipeline_logs`, `sync_logs`, `query_logs`, `web_search_log`, `event_log` (범용 JSON) |
-| System | 3 | `llm_config`, `system_job`, `system_health` |
-| **Views** | 2 | `user_activity_summary`, `document_stats` |
-
----
-
-## 시스템 흐름도
-
-### 문서 인제스트 파이프라인
-
-```mermaid
-flowchart TD
-    START([문서 처리 시작]) --> CHECK{document 테이블<br/>상태 확인}
-    CHECK -->|pending| PROC[status → processing]
-    CHECK -->|processing/indexed| SKIP([스킵])
-
-    PROC --> PARSE[MinerU Parse]
-    PARSE -->|OCR + 레이아웃 분석| TEXT[텍스트 + 이미지 추출]
-    PARSE -->|실패| FAIL
-
-    TEXT --> CHUNK[Hybrid Chunking]
-    CHUNK -->|시맨틱 + 토큰 기반<br/>512 tokens, 50 overlap| CHUNKS[청크 리스트]
-    CHUNK -->|실패| FAIL
-
-    CHUNKS --> EMBED[BGE-M3 Embed]
-    EMBED -->|batch=32<br/>1024-dim vectors| VECS[임베딩 벡터]
-    EMBED -->|실패| FAIL
-
-    VECS --> INDEX[pgvector Index]
-    INDEX -->|HNSW insert<br/>tsvector 자동 생성| PG[(PostgreSQL)]
-    INDEX -->|실패| FAIL
-
-    PG --> GRAPH[Graph Extract]
-    GRAPH -->|NER 엔티티 추출| NEO[(Neo4j)]
-    GRAPH -->|실패| FAIL
-
-    NEO --> DONE[status → indexed]
-
-    FAIL([status → failed<br/>error_msg 기록])
-
-    style START fill:#e1f5fe
-    style DONE fill:#c8e6c9
-    style FAIL fill:#ffcdd2
-```
-
-**파이프라인 단계별 로그** (`pipeline_logs` 테이블):
-
-| stage | 설명 |
-|-------|------|
-| `mineru_parse` | MinerU OCR 파싱 |
-| `chunk` | 텍스트 청킹 |
-| `embed` | BGE-M3 임베딩 |
-| `index` | pgvector 인덱싱 |
-| `graph_extract` | Neo4j 엔티티 추출 |
-
----
-
-### RAG 질의 흐름
-
-```mermaid
-flowchart TD
-    START([사용자 질의]) --> AUTH{JWT 인증}
-    AUTH -->|실패| ERR401([401 Unauthorized])
-    AUTH -->|성공| SESSION{세션 확인}
-    SESSION -->|없음| ERR404([404 Not Found])
-    SESSION -->|있음| HISTORY[최근 20개 메시지 로드]
-
-    HISTORY --> EMBED[BGE-M3 쿼리 임베딩]
-
-    EMBED --> SEARCH{Parallel Search}
-    SEARCH --> DENSE[Dense Search<br/>pgvector cosine similarity]
-    SEARCH --> SPARSE[Sparse Search<br/>tsvector ts_rank]
-
-    DENSE --> RBAC[RBAC 필터]
-    SPARSE --> RBAC
-    RBAC -->|dept_id + folder_access| RRF[RRF Merge<br/>k=60]
-
-    RRF --> RERANK[BGE-reranker-v2-m3<br/>top-20 → top-5]
-
-    RERANK --> GRAPH[Neo4j Graph Context<br/>NER → 2-hop 탐색]
-
-    GRAPH --> PROMPT[프롬프트 빌드<br/>system + context + graph + history + query]
-
-    PROMPT --> STREAM[vLLM SSE Stream]
-
-    STREAM -->|token 이벤트| CLIENT[클라이언트 스트리밍]
-    STREAM -->|완료| SAVE
-
-    SAVE[DB 저장]
-    SAVE --> MSG_U[user 메시지 저장]
-    SAVE --> MSG_A[assistant 메시지 저장]
-    SAVE --> REFS[msg_ref 참조 저장]
-    SAVE --> QLOG[query_logs 기록]
-
-    style START fill:#e1f5fe
-    style CLIENT fill:#e8f5e9
-    style ERR401 fill:#ffcdd2
-    style ERR404 fill:#ffcdd2
-```
-
-**SSE 이벤트 순서:**
-
-```
-1. data: {"type": "token", "content": "..."}  (N회 반복)
-2. data: {"type": "references", "refs": [...]}
-3. data: {"type": "done", "msg_id": 42}
-```
-
----
-
-### 파일 동기화 흐름
-
-```mermaid
-flowchart TD
-    START([APScheduler 트리거<br/>30분 주기]) --> SCAN[파일 시스템 스캔]
-
-    SCAN --> HASH[각 파일 SHA-256 해시 계산]
-
-    HASH --> COMPARE{DB 해시 비교}
-    COMPARE -->|해시 없음| NEW[신규 파일]
-    COMPARE -->|해시 변경| MOD[수정 파일]
-    COMPARE -->|DB에만 존재| DEL[삭제 파일]
-    COMPARE -->|동일| SKIP([스킵])
-
-    NEW --> REG[document 테이블 등록<br/>status = pending]
-    MOD --> UPD[document 테이블 갱신<br/>status = pending, version++]
-    DEL --> MARK[document 상태 변경]
-
-    REG --> LOG[sync_logs 기록]
-    UPD --> LOG
-    MARK --> LOG
-
-    LOG --> CHECK{신규 doc_ids?}
-    CHECK -->|예| TRIGGER[POST /pipeline/trigger<br/>rag-pipeline API]
-    CHECK -->|아니오| DONE([동기화 완료])
-    TRIGGER --> DONE
-
-    style START fill:#e1f5fe
-    style TRIGGER fill:#fff3e0
-    style DONE fill:#c8e6c9
-```
-
----
-
-### 인증 흐름
-
-```mermaid
-flowchart TD
-    subgraph Login
-        L_START([POST /auth/login]) --> L_CHECK{이메일 조회}
-        L_CHECK -->|없음| L_ERR([401 Invalid credentials])
-        L_CHECK -->|있음| L_LOCK{계정 잠금?}
-        L_LOCK -->|잠금| L_ERR_LOCK([403 Account locked])
-        L_LOCK -->|정상| L_PWD{비밀번호 검증}
-        L_PWD -->|불일치| L_FAIL[failure++ 증가]
-        L_FAIL --> L_FIVE{failure >= 5?}
-        L_FIVE -->|예| L_DO_LOCK[locked_until = now + 30분]
-        L_FIVE -->|아니오| L_ERR
-        L_DO_LOCK --> L_ERR
-        L_PWD -->|일치| L_RESET[failure = 0, last_login = now]
-        L_RESET --> L_TOKEN[Access Token 생성 15분<br/>Refresh Token 생성 7일]
-        L_TOKEN --> L_SAVE[refresh_token 해시 DB 저장]
-        L_SAVE --> L_RESP([200 TokenResponse])
-    end
-
-    subgraph Refresh
-        R_START([POST /auth/refresh]) --> R_DECODE{refresh token 디코드}
-        R_DECODE -->|만료/무효| R_ERR([401 Invalid token])
-        R_DECODE -->|유효| R_DB{DB 해시 확인}
-        R_DB -->|revoked| R_ERR
-        R_DB -->|유효| R_NEW[새 Access Token 발급]
-        R_NEW --> R_RESP([200 AccessTokenResponse])
-    end
-
-    subgraph Protected API
-        P_START([Bearer Token]) --> P_DECODE{access token 디코드}
-        P_DECODE -->|만료/무효| P_ERR([401 Unauthorized])
-        P_DECODE -->|유효| P_USER[사용자 조회 + is_active 확인]
-        P_USER --> P_OK([인증 완료])
-    end
-
-    style L_RESP fill:#c8e6c9
-    style R_RESP fill:#c8e6c9
-    style P_OK fill:#c8e6c9
-    style L_ERR fill:#ffcdd2
-    style L_ERR_LOCK fill:#ffcdd2
-    style R_ERR fill:#ffcdd2
-    style P_ERR fill:#ffcdd2
-```
-
-| 항목 | 값 |
-|------|-----|
-| Access Token 만료 | 15분 |
-| Refresh Token 만료 | 7일 |
-| 알고리즘 | HS256 |
-| 로그인 실패 잠금 | 5회 실패 → 30분 잠금 |
-
----
-
-## 서브 프로젝트
-
-### rag-pipeline
-
-문서 수집/파싱/청킹/임베딩/인덱싱 파이프라인. MinerU로 OCR 파싱 후 BGE-M3 임베딩, pgvector + Neo4j에 인덱싱. Celery 비동기 처리.
-
-### rag-serving
-
-RAG 질의응답 + JWT 인증 + 관리자 API. Hybrid Search (Dense + Sparse + RRF) + Reranker + GraphRAG + vLLM SSE 스트리밍.
-
-### rag-sync-monitor
-
-파일/사용자 동기화 스케줄러 + Streamlit 모니터링 대시보드. 주기적 파일 스캔 후 변경 감지, rag-pipeline API로 처리 트리거.
-
----
-
-## 개발 환경 설정
-
-### 로컬 개발 (Docker 없이)
+### 5.2 Mock 토글로 부분 개발
 
 ```bash
-# Python 가상환경
-python3.11 -m venv .venv
-source .venv/bin/activate
-
-# 각 서비스 의존성 설치
-pip install -r rag-pipeline/requirements.txt
-pip install -r rag-serving/requirements.txt
-pip install -r rag-sync-monitor/requirements.txt
-
-# 인프라만 Docker로 실행
-make dev-infra
-
-# 각 서비스 개별 실행
-uvicorn rag_pipeline.api.main:app --port 8001 --reload
-uvicorn rag_serving.api.main:app --port 8002 --reload
-streamlit run rag_sync_monitor/dashboard/app.py --server.port 8003
-
-# Frontend
-cd frontend && npm install && npm run dev
+make up-mock                      # 전체 mock
+docker compose -f infra/docker-compose.yml stop m3-chunk-embed
+MODULE_IMPL=real docker compose -f infra/docker-compose.yml up -d --no-deps m3-chunk-embed
 ```
 
-### vLLM 모델 다운로드 (GPU 서버)
+### 5.3 MySQL 동기화 (M1)
+
+필수 env: `MYSQL_URL`, `MYSQL_TABLE_USERS`, `MYSQL_TABLE_ROLES`, `MYSQL_TABLE_DEPARTMENTS`  
+기본값: 60분 주기(`MYSQL_SYNC_INTERVAL_MINUTES`), 1000건 배치(`MYSQL_SYNC_BATCH_SIZE`)
+
+### 5.4 테스트
 
 ```bash
-huggingface-cli download Qwen/Qwen2.5-72B-Instruct-AWQ \
-  --local-dir /data/models/vllm/Qwen2.5-72B-Instruct-AWQ
-
-# 멀티 GPU 설정 (.env)
-VLLM_TENSOR_PARALLEL=4
-VLLM_GPU_COUNT=4
+make test          # 모든 백엔드 pytest
+make test-fe       # M6/M7-fe vitest
+make test-e2e      # testcontainers 통합 (Docker 필요)
+make test-all      # unit + e2e 전체
+cd modules/<m> && make test-cov
 ```
-
-로컬 경로 모델을 직접 사용할 수도 있습니다.
-
-```ini
-VLLM_MODEL=/models/vllm/Qwen2.5-72B-Instruct-AWQ
-VLLM_MODEL_DIR=/data/models/vllm
-```
-
-즉, 이 프로젝트는 OpenAI 외부 API가 아니라 온프렘 `vllm-server`를 기본으로 사용하며, `VLLM_MODEL`에는 Hugging Face repo ID와 로컬 모델 경로를 모두 넣을 수 있습니다.
-
-### MinerU API 사용 방식
-
-MinerU API는 별도 마이크로서비스이지만, 현재 프로젝트에서는 주로 `pipeline-worker`가 HTTP로 호출합니다.
-
-현재 Docker 기본 빌드는 공식 PyPI 최신 버전 기준 `mineru[all]==2.7.6`으로 pinning되어 있습니다. 다른 버전으로 검증해야 하면 `Dockerfile.mineru`의 `MINERU_PIP_SPEC` build arg만 조정하면 됩니다.
-
-- PDF, PNG, JPG, TIFF: `mineru-api`의 `/parse`를 호출
-- DOCX, XLSX, XLS, PPTX: MinerU를 거치지 않고 `rag-pipeline` 내부 로컬 파서 사용
-
-즉, "항상 따로 수동으로 호출해야 하는 서비스"는 아니고, PDF/이미지 계열 문서가 들어올 때 파이프라인에서 자동으로 사용됩니다.
-
-직접 헬스체크나 테스트도 가능합니다.
-
-```bash
-curl http://localhost:9000/health
-
-curl -X POST http://localhost:9000/parse \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "file_path": "/data/documents/sample.pdf",
-    "method": "auto",
-    "backend": "hybrid-auto-engine",
-    "lang": "korean"
-  }'
-```
-
-MinerU 결과물은 `MINERU_OUTPUT_DIR` 아래에 생성되고, 파이프라인은 그중 이미지를 `IMAGE_STORE_DIR`와 `doc_image` 테이블로 옮겨 저장합니다.
 
 ---
 
-## 환경변수 레퍼런스
+## 6. 배포
 
-## Phase 1 구현 상태
-
-현재 레포에는 Korean + Hybrid Retrieval Upgrade의 1차 구현이 포함되어 있습니다.
-
-- `entity_alias`: 한글/영문/약어 alias 사전
-- `doc_keyword`: chunk 단위 exact/keyword 검색 인덱스
-- query expansion: 질의어를 alias 집합으로 확장
-- exact match boost: 파일명/본문/keyword hit 기반 가중치 추가
-
-신규 테이블은 fresh DB에서는 `shared/sql/init.sql`로 생성되고, 기존 DB에서는 앱 시작 시 bootstrap 경로로 `CREATE TABLE IF NOT EXISTS`가 수행됩니다.
-
-이미 인덱싱이 끝난 기존 문서에 `doc_keyword`를 채우려면 한 번 재처리(`POST /pipeline/trigger/full` 또는 문서별 재처리)가 필요합니다.
-
-## Phase 2 구현 상태
-
-현재 레포에는 멀티모달 block indexing의 1차 토대가 포함되어 있습니다.
-
-- `doc_block`: 문서 내 text/table/caption/image block 저장
-- `doc_chunk.block_id`: chunk와 원본 block 연결
-- block-aware chunking: DOCX/XLSX/PPTX/MinerU 결과를 block 메타데이터와 함께 청킹
-- block-aware ranking: table/caption/slide/sheet 질의에서 block type metadata를 검색 점수와 reranker 입력에 반영
-- image block caption linkage: image block에 주변 caption을 연결해 retrieval 힌트 강화
-- 관리자 콘솔: 문서별 `block_count`, block preview, image preview 확인 가능
-
-즉, Phase 2의 현재 범위는 "표/이미지/텍스트를 block 단위로 구조화하고 운영자가 확인할 수 있는 상태"입니다. 아직 block-level retrieval나 image/table 전용 reranking은 다음 단계 범위입니다.
-
-### Linux GPU 재검증 가이드
-
-Ubuntu 24.04 + Intel Xeon + NVIDIA L40S 환경에서는 기본 `docker-compose.yml` 경로를 사용합니다.
+### 6.1 이미지 빌드
 
 ```bash
-make up-gpu
-make ps
+make build-images          # 전체
+cd modules/<m> && make build  # 모듈별
 ```
 
-문서 재처리 후 아래 쿼리로 block/chunk 적재 여부를 확인할 수 있습니다.
+### 6.2 환경변수 검증
 
 ```bash
-docker compose exec -T postgres psql -U admin -d rag_system -c "
-select doc_id, file_name, status, total_page_cnt
-from document
-order by doc_id desc
-limit 20;
-"
-
-docker compose exec -T postgres psql -U admin -d rag_system -c "
-select doc_id, count(*) as block_count
-from doc_block
-group by doc_id
-order by doc_id desc
-limit 20;
-"
-
-docker compose exec -T postgres psql -U admin -d rag_system -c "
-select doc_id, count(*) as chunk_count
-from doc_chunk
-group by doc_id
-order by doc_id desc
-limit 20;
-"
+make env-check   # JWT_SECRET, POSTGRES_URL, REDIS_URL, VLLM_URL 존재 확인
 ```
 
-관리자 화면에서는 `http://localhost:3000/admin`의 문서 탭과 문서 상세 드로어에서 `block_count`가 보여야 정상입니다.
-문서 상세 드로어에서는 최근 block 목록과 image block preview도 확인할 수 있습니다.
+### 6.3 GitHub Actions
 
-채팅 재검증 시에는 아래처럼 block 의도가 분명한 질의를 함께 확인하는 것이 좋습니다.
+- `ci.yml` (push/PR): lint + test + contracts-diff
+- `image-build.yml` (main): GHCR push, 변경 모듈만
+- `pr-checks.yml` (PR): schemathesis + bandit + safety + gitleaks
 
-- `표로 EGFR 적응증 정리된 문서 보여줘`
-- `슬라이드에서 milestone summary가 있는 페이지 찾아줘`
-- `Sheet 기준으로 NSCLC 관련 값을 보여줘`
-
-### 내일 Linux GPU 디버깅 우선순위
-
-1. 컨테이너/볼륨 확인
-   `serving-api`에도 `IMAGE_STORE_DIR`가 마운트되어 있어야 image preview API가 정상 동작합니다.
-2. 문서 재처리 확인
-   기존에 `indexed`된 문서는 `doc_block`, `doc_chunk.block_id`, `doc_image`를 채우려면 재처리가 필요합니다.
-3. DB 적재 확인
-   `document`, `doc_block`, `doc_chunk`, `doc_image`, `pipeline_logs`를 함께 확인합니다.
-4. 관리자 화면 확인
-   `/admin` 문서 상세에서 `block_count`, block preview, image preview가 모두 보여야 합니다.
-5. 채팅 retrieval 확인
-   table/slide/sheet 의도 질의에서 reference의 `block_type`, `page`, `sheet_name`, `slide_number`가 기대대로 나오는지 확인합니다.
-
-추천 점검 쿼리:
+### 6.4 백업
 
 ```bash
-docker compose exec -T postgres psql -U admin -d rag_system -c "
-select d.doc_id, d.file_name, d.status,
-       count(distinct b.block_id) as block_count,
-       count(distinct c.chunk_id) as chunk_count,
-       count(distinct i.image_id) as image_count
-from document d
-left join doc_block b on b.doc_id = d.doc_id
-left join doc_chunk c on c.doc_id = d.doc_id
-left join doc_image i on i.doc_id = d.doc_id
-group by d.doc_id, d.file_name, d.status
-order by d.doc_id desc
-limit 20;
-"
+make backup-all   # pg_dump + neo4j-admin dump → backups/
 ```
 
-### 공통 (shared)
+자동: `infra/cron/backup.sh` 를 호스트 cron 등록 (30일 retention).
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `POSTGRES_HOST` | `postgres` | PostgreSQL 호스트 |
-| `POSTGRES_PORT` | `5432` | PostgreSQL 포트 |
-| `POSTGRES_DB` | `rag_system` | 데이터베이스 이름 |
-| `POSTGRES_USER` | `admin` | DB 사용자 |
-| `POSTGRES_PASSWORD` | `changeme` | DB 비밀번호 **(변경 필수)** |
-| `NEO4J_URL` | `bolt://neo4j:7687` | Neo4j Bolt URL |
-| `NEO4J_USER` | `neo4j` | Neo4j 사용자 |
-| `NEO4J_PASSWORD` | `changeme` | Neo4j 비밀번호 **(변경 필수)** |
-| `REDIS_URL` | `redis://redis:6379/0` | Redis URL |
-| `JWT_SECRET` | *(변경 필수)* | JWT 서명 키 (32자+) |
-| `JWT_ACCESS_EXPIRE_MINUTES` | `15` | Access token 만료 (분) |
-| `JWT_REFRESH_EXPIRE_DAYS` | `7` | Refresh token 만료 (일) |
-| `EMBEDDING_MODEL_NAME` | `BAAI/bge-m3` | 임베딩 모델 |
-| `RERANKER_MODEL_NAME` | `BAAI/bge-reranker-v2-m3` | 리랭커 모델 |
-| `HF_TOKEN` | - | HuggingFace 토큰 (private 모델) |
+---
 
-### rag-pipeline
+## 7. 관측성
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `MINERU_API_URL` | `http://mineru-api:9000` | MinerU API URL |
-| `CHUNK_STRATEGY` | `hybrid` | 청킹 전략 |
-| `CHUNK_SIZE` | `512` | 청크 최대 토큰 수 |
-| `CHUNK_OVERLAP` | `50` | 청크 오버랩 토큰 |
-| `DOC_WATCH_DIR` | `/data/documents` | 문서 감시 폴더 (호스트) |
-| `IMAGE_STORE_DIR` | `/data/images` | 이미지 저장 경로 |
+### 7.1 스택 기동
 
-### rag-serving
+```bash
+make obs-up   # Prometheus + Grafana + Loki + Promtail + Alertmanager
+```
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `VLLM_BASE_URL` | `http://vllm-server:8000/v1` | vLLM API URL |
-| `VLLM_MODEL_NAME` | `local-llm` | serving runtime이 우선 참조하는 모델명 |
-| `PREFER_ENV_LLM_CONFIG` | `true` | DB의 active LLM config보다 `.env` 값을 우선 적용 |
-| `GOOGLE_API_KEY` | - | Google Custom Search API 키 |
-| `GOOGLE_CX` | - | Google 커스텀 검색 엔진 ID |
+| 서비스 | URL |
+|--------|-----|
+| Grafana | http://localhost:3001 (admin / `infra/secrets/grafana_password`) |
+| Prometheus | http://localhost:9090 |
+| Alertmanager | http://localhost:9093 |
 
-### rag-sync-monitor
+### 7.2 메트릭 / 알림
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `SYNC_INTERVAL_MINUTES` | `30` | 동기화 주기 (분) |
+- 모든 백엔드 `/metrics` 노출 (M5는 Basic Auth 보호)
+- 사전 정의 알림: `HighErrorRate`(>5%), `HighP99Latency`(>3s), `M1SyncFailure`, `DiskUsageHigh`, `CircuitBreakerOpen`
 
-### frontend
+### 7.3 부하 테스트
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `NEXT_PUBLIC_API_URL` | 빈 값 | 비어 있으면 현재 브라우저 host 기준으로 `:8002`를 사용 |
+```bash
+LOAD_HOST=http://localhost:8005 make load-test   # 100u / 30분 / 200qpm
+make load-spike                                  # 0→200 over 30s
+# 결과: loadtest/results/sustained_*.csv
+```
+
+---
+
+## 8. 운영 환경 사양
+
+| 항목 | 기준 |
+|------|------|
+| OS | Ubuntu 24.04 LTS |
+| GPU | 1/4 NVIDIA (M3 임베딩 + M4 query embedding 공유) |
+| RAM | 512 GB |
+| 동시 사용자 | 100 |
+| 분당 쿼리 | 200 qpm |
+| PostgreSQL | pgvector/pgvector:pg16 |
+| Redis | 7 (appendonly) |
+| Neo4j | 5 (선택, Graph RAG용) |
+
+---
+
+## 9. 디렉토리 구조
+
+```
+.
+├── modules/            # M1~M8 마이크로서비스 (각 Makefile 보유)
+│   ├── m1-identity/    m2-doc-to-md/    m3-chunk-embed/    m4-rag/
+│   ├── m5-gateway/     m6-ui/           m7-admin/{backend,frontend}/
+│   └── m8-web-search/
+├── packages/
+│   ├── contracts/      # OpenAPI SSOT (7 YAML + .sha256 락)
+│   └── shared-py/      # 공통 config / db / http / logging
+├── infra/
+│   ├── docker-compose.{yml,base,mock,observability}.yml
+│   ├── secrets/        observability/    cron/
+├── tests-e2e/          # testcontainers 통합 테스트
+├── loadtest/           # locust 시나리오
+├── scripts/            # contracts-lock / contracts-verify
+├── .github/workflows/  # CI/CD (ci, image-build, pr-checks)
+└── Makefile            # 루트 오케스트레이션
+```
+
+---
+
+## 10. 기여
+
+브랜치: `feat/<module>/<description>` → `make test && make lint` → PR  
+PR 시 GitHub Actions (lint / test / contracts-diff) 자동 검증.  
+CODEOWNERS: `.github/CODEOWNERS`
+
+---
+
+## 11. 라이선스
+
+MIT

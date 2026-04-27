@@ -1,0 +1,11 @@
+{
+  "/users/page": "app/users/page.js",
+  "/page": "app/page.js",
+  "/documents/page": "app/documents/page.js",
+  "/pipeline/page": "app/pipeline/page.js",
+  "/web-search/page": "app/web-search/page.js",
+  "/audit-log/page": "app/audit-log/page.js",
+  "/query-log/page": "app/query-log/page.js",
+  "/metrics/page": "app/metrics/page.js",
+  "/health/page": "app/health/page.js"
+}

@@ -1,0 +1,57 @@
+groups:
+  - name: rag-llm-alerts
+    rules:
+      - alert: HighErrorRate
+        expr: >
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "5xx ratio > 5%"
+          description: "The 5xx error rate has exceeded 5% for more than 5 minutes."
+
+      - alert: HighP99Latency
+        expr: >
+          histogram_quantile(0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job)
+          ) > 3
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p99 > 3s"
+          description: "p99 request latency is above 3 seconds for job {{ $labels.job }}."
+
+      - alert: M1SyncFailure
+        expr: >
+          m1_sync_run_failed_total
+          - m1_sync_run_failed_total offset 1h > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "M1 MySQL sync failed in last hour"
+          description: "At least one MySQL → Postgres sync run has failed in the past hour."
+
+      - alert: DiskUsageHigh
+        expr: >
+          (node_filesystem_size_bytes - node_filesystem_avail_bytes)
+          / node_filesystem_size_bytes > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk > 85%"
+          description: "Filesystem usage is above 85% on {{ $labels.instance }}."
+
+      - alert: CircuitBreakerOpen
+        expr: m5_circuit_breaker_state == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Gateway circuit breaker open"
+          description: "M5 gateway circuit breaker has been open for more than 2 minutes."
