@@ -25,12 +25,18 @@ async def test_chat_streams_sse(client):
     from .conftest import make_token
     token = make_token(perms=["chat.use"])
 
-    async def fake_aiter():
-        yield "hello"
-        yield " world"
+    # m5 does a transparent pass-through of m4's SSE bytes — it must NOT
+    # re-wrap event types. We feed pre-framed SSE upstream and assert the
+    # same framing emerges from the gateway.
+    async def fake_aiter_bytes():
+        yield b"event: token\ndata: {\"token\": \"hello\", \"delta\": \"hello\"}\n\n"
+        yield b"event: token\ndata: {\"token\": \" world\", \"delta\": \" world\"}\n\n"
+        yield b"event: done\ndata: {}\n\n"
 
     mock_stream_cm = MagicMock()
-    mock_stream_cm.__aenter__ = AsyncMock(return_value=MagicMock(aiter_text=fake_aiter))
+    mock_stream_cm.__aenter__ = AsyncMock(
+        return_value=MagicMock(aiter_bytes=fake_aiter_bytes)
+    )
     mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
 
     with patch("app.clients.downstream.get_client") as mock_get:
@@ -49,3 +55,4 @@ async def test_chat_streams_sse(client):
     body = r.text
     assert "event: token" in body
     assert "delta" in body
+    assert "event: done" in body

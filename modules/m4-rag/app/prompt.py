@@ -102,7 +102,7 @@ def build(
         kept += 1
 
     ctx = "\n\n".join(parts)
-    msgs: List[Dict] = [{"role": "system", "content": SYS_REAL}]
+    msgs = [{"role": "system", "content": SYS_REAL}]
     msgs.extend(trim_history(history))
     msgs.append(
         {"role": "user", "content": f"Context:\n{ctx}\n\n질문: {query}"}

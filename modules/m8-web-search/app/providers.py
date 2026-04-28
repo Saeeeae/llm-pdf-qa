@@ -102,7 +102,7 @@ class BraveProvider(SearchProvider):
         key = os.getenv("BRAVE_SEARCH_API_KEY")
         if not key:
             raise ProviderError("BRAVE_SEARCH_API_KEY is not configured")
-        params = {
+        params: dict[str, str | int] = {
             "q": safe_query,
             "count": min(req.max_results, 20),
             "search_lang": req.locale.split("-")[0] if req.locale else "ko",

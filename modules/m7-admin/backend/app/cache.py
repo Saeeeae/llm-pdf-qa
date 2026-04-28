@@ -39,7 +39,9 @@ async def cache_set(key: str, value: Any, ttl: int = 30) -> None:
 async def check_redis_connectivity() -> bool:
     try:
         r = get_redis()
-        await r.ping()
+        # redis.asyncio.Redis.ping() is typed as Awaitable[bool] | bool depending
+        # on redis-py version; cast through Any so mypy doesn't trip on the union.
+        await r.ping()  # type: ignore[misc]
         return True
     except Exception:
         return False

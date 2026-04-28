@@ -56,7 +56,8 @@ async def audit_log(
         "FROM audit_log WHERE 1=1"
     )
     count_base = "SELECT COUNT(*) FROM audit_log WHERE 1=1"
-    conds, params = [], {}
+    conds: list[str] = []
+    params: dict = {}
     if user_id:
         conds.append(" AND user_id = :user_id")
         params["user_id"] = user_id
@@ -456,7 +457,8 @@ async def export_audit_log_csv(
         "ts AS created_at "
         "FROM audit_log WHERE 1=1"
     )
-    conds, params = [], {}
+    conds: list[str] = []
+    params: dict = {}
     if user_id:
         conds.append(" AND user_id = :user_id")
         params["user_id"] = user_id

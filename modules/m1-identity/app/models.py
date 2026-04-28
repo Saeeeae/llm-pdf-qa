@@ -12,8 +12,8 @@ _TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 if _TEST_MODE:
     from sqlalchemy import JSON as JSONB
     # SQLite doesn't support BigInteger autoincrement — use Integer
-    PkCol = Integer
-    FkType = Integer
+    PkCol: type = Integer
+    FkType: type = Integer
 else:
     from sqlalchemy.dialects.postgresql import JSONB  # noqa: F811
     PkCol = BigInteger

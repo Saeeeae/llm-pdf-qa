@@ -235,7 +235,9 @@ class Chunker:
         Yields ParentChunk for kind="parent", _Tmp for kind="leaf" (caller fills
         parent_idx/hash/metadata).
         """
-        out = []
+        # Mixed-type return list — annotated as `Any` so mypy tolerates the
+        # ParentChunk vs _Tmp branching below.
+        out: list = []  # type: ignore[type-arg]
         idx = offset
         n = len(ids)
         if n == 0:
@@ -255,7 +257,8 @@ class Chunker:
             piece_ids = ids[cursor:snapped_end]
             if not piece_ids:
                 break
-            piece = self.tok.decode(piece_ids).strip()
+            decoded = self.tok.decode(piece_ids)
+            piece = decoded.strip() if isinstance(decoded, str) else " ".join(decoded).strip()
             if piece:
                 if kind == "parent":
                     out.append(
