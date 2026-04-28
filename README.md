@@ -58,16 +58,18 @@
 
 ## 2. 모듈 구성
 
-| 모듈 | 책임 | 주요 기술 | 포트 |
+| 모듈 | 책임 | 주요 기술 | 호스트 포트 |
 |------|------|----------|------|
-| **M1 identity** | 사용자, 인증, RBAC, MySQL 동기화 | FastAPI, asyncpg, asyncmy, APScheduler | 8001 |
-| **M2 doc-to-md** | 문서 → Markdown 변환 (cron 02:00) | kordoc, APScheduler, Redis lock | 8002 |
-| **M3 chunk-embed** | 청킹 + bge-m3 임베딩 + pgvector 저장 | sentence-transformers, asyncpg | 8003 |
-| **M4 rag** | 하이브리드 검색 + vLLM 스트리밍 | pgvector, RRF, vLLM | 8004 |
-| **M5 gateway** | 라우팅, 인증, rate limit, circuit breaker | httpx, Redis | 8005 |
+| **M1 identity** | 사용자, 인증, RBAC, MySQL 동기화 | FastAPI, asyncpg, asyncmy, APScheduler | 8101 |
+| **M2 doc-to-md** | 문서 → Markdown 변환 (cron 02:00) | kordoc, APScheduler, Redis lock | 8102 |
+| **M3 chunk-embed** | 계층 청킹 + bge-m3 임베딩 + pgvector(HNSW) | sentence-transformers, asyncpg | 8103 |
+| **M4 rag** | retrieve→rerank→MMR→parent→vLLM 스트리밍 | pgvector, BGE-reranker, vLLM | 8104 |
+| **M5 gateway** | 라우팅, 인증, rate limit, circuit breaker | httpx, Redis | **8080** |
 | **M6 ui** | 사용자 채팅 UI | Next.js 14, TypeScript, SSE | 3000 |
-| **M7 admin** | 관리자 대시보드 (BE + FE) | FastAPI + Next.js | 8007 / 3001 |
-| **M8 web-search** | 외부 검색 + DLP + SSRF 차단 | httpx, ipaddress | 8008 |
+| **M7 admin** | 관리자 대시보드 (BE + FE) | FastAPI + Next.js | 8107 / 3001 |
+| **M8 web-search** | 외부 검색 + DLP + SSRF 차단 | httpx, ipaddress | 8108 |
+
+> 컨테이너 내부 포트는 백엔드 모두 `8000`, 프론트엔드는 `3000` / `3001`. 위 표는 호스트로 publish되는 포트입니다.
 
 각 모듈은 자체 OpenAPI 스펙을 `packages/contracts/` 에 보유 (M6 제외).
 
@@ -75,52 +77,136 @@
 
 ## 3. 빠른 시작
 
+> 빌드/배포 상세는 [BUILD.md](BUILD.md) 참고.
+
 ### 3.1 사전 준비
 
-- Docker 24.0+ + Docker Compose v2
-- Python 3.11+
-- Node.js 20+ (M6, M7 frontend)
+- **Docker 24.0+** + Docker Compose v2 (필수)
+- vLLM 호환 LLM 서버 — GPU 노드에서 별도 기동 (M4가 호출, [3.7](#37-vllm-기동-별도-호스트) 참고)
+- (선택) Python 3.11+ — 컨테이너 안에서 다 돌아가니 호스트에 없어도 무방
+- (선택) Node.js 20+ — `make run` 호스트 모드용
 - (선택) NVIDIA Container Toolkit — GPU 사용 시
 
-### 3.2 Secrets 생성
+### 3.2 처음 시작하는 분을 위한 한 번에 끝내기
+
+이 흐름을 그대로 따라하면 `git clone` → 채팅 가능한 상태까지 갑니다.
 
 ```bash
-mkdir -p infra/secrets
-for n in jwt_secret postgres_password neo4j_password grafana_password; do
-  openssl rand -base64 48 > infra/secrets/$n
-  chmod 600 infra/secrets/$n
-done
+# 1. 저장소 클론
+git clone <this-repo-url> rag-llm && cd rag-llm
+
+# 2. 호스트 데이터 디렉토리 생성 (sudo 필요할 수 있음)
+sudo make data-init                            # /data, /data2 트리 생성
+sudo chown -R $(id -u):$(id -g) /data /data2   # 사용자 권한
+
+# 3. 비밀 자동 생성 (JWT, PG, Neo4j)
+make secrets-init                              # infra/secrets/* 생성
+
+# 4. (선택) vLLM 별도 기동 — 3.7 참고. 안 띄워도 stack 자체는 동작하나
+#    채팅 응답이 503으로 떨어집니다.
+
+# 5. 전체 스택 빌드 + 기동 (단계 2,3을 자동으로 한 번 더 호출하므로 안전)
+make up
+
+# 6. DB 스키마 (컨테이너 안에서 alembic 실행 — 호스트 Python 필요 없음)
+make migrate
+
+# 7. 입력 문서 한 개 넣고 인덱싱
+sudo cp ~/path/to/sample.pdf /data2/sample.pdf
+sudo chown $(id -u):$(id -g) /data2/sample.pdf
+cd modules/m2-doc-to-md && make docker-pipeline   # /data2 → /data/markdown → m3 → embedding
+
+# 8. 체크
+curl -f http://localhost:8080/health      # 게이트웨이
+curl -f http://localhost:8104/ready       # m4 RAG (vLLM 미기동 시 503 OK)
+open http://localhost:3000                # 사용자 UI
+open http://localhost:3001                # 관리자 UI (admin.read 권한 필요)
 ```
 
-### 3.3 환경변수 설정
+### 3.3 호스트 데이터 디렉토리 레이아웃
+
+영속 데이터는 호스트의 두 경로에 바인드 마운트됩니다:
+
+| 경로 | 용도 |
+|------|------|
+| `DATA_ROOT` (기본 `/data`) | DB, 모델 캐시, 마크다운, state, 로그 |
+| `DATA2_ROOT` (기본 `/data2`) | 원본 입력 문서 (RO) |
+
+다른 경로를 쓰려면:
+```bash
+DATA_ROOT=/mnt/nvme/rag DATA2_ROOT=/mnt/nas/docs make up
+```
+
+`make data-init`이 만드는 하위 트리:
+```
+/data/db/{postgres,neo4j,redis}     /data/models     /data/markdown
+/data/state/m2                      /data/logs/{m2,m5,m7,m8}
+/data2/                             ← 여기에 PDF/DOCX 등을 넣음
+```
+
+### 3.4 첫 사용자 만들기
+
+`make migrate`가 끝나면 `roles` 테이블엔 `admin/manager/user`가 시드되지만 **users 테이블은 비어있습니다**. 두 가지 방법:
+
+**A. MySQL HR 시스템 동기화 (운영 권장)**
+```bash
+# .env 또는 컨테이너 환경변수에
+MYSQL_URL=mysql+asyncmy://user:pass@hr-db:3306/hr
+MYSQL_SYNC_ON_STARTUP=1
+```
+m1 기동 시 한 번 동기화. 자세한 옵션은 [modules/m1-identity/README.md](modules/m1-identity/README.md).
+
+**B. 수동 부트스트랩 (개발/PoC)**
+```bash
+docker compose -f infra/docker-compose.yml exec postgres \
+  psql -U postgres -d ragdb -c "
+    INSERT INTO users (email, password_hash, name, role_id, is_active)
+    VALUES ('admin@example.com', '\$argon2id\$...PUT-HASH-HERE...', '관리자',
+            (SELECT id FROM roles WHERE name='admin'), true);
+  "
+```
+argon2 해시는 `python -c "from argon2 import PasswordHasher; print(PasswordHasher().hash('your-password'))"`로 만드세요.
+
+### 3.5 Mock 모드 (DB/GPU/vLLM 전부 없이 UX만 보기)
 
 ```bash
-cp .env.example .env
-# 필수: POSTGRES_URL, REDIS_URL, JWT_SECRET (32자+), VLLM_URL
+make up-mock        # 모든 모듈 MODULE_IMPL=mock, 인프라(PG/Redis)만 실제
 ```
+브라우저에서 `http://localhost:3000` 열고 `mock@example.com / mock`으로 로그인 (Mock 핸들러가 응답).
 
-### 3.4 전체 스택 기동
+### 3.6 단일 모듈만
 
 ```bash
-make bootstrap      # 백엔드 모듈 + shared-py editable 설치
-make install-fe     # Frontend npm install
-make migrate        # Alembic 스키마 적용 (M1, M3)
-make up             # 전체 스택 (Postgres + Redis + 8 modules)
+make up-one m=m3-chunk-embed     # base infra + 한 모듈만 (개발 시)
+make build-one m=m6-ui           # 이미지만 빌드
+cd modules/m4-rag && make docker-up    # 모듈 디렉토리에서도 가능
 ```
 
-기동 확인:
+### 3.7 vLLM 기동 (별도 호스트)
+
+M4가 답변 생성을 위임하는 LLM 서버입니다. 본 compose에는 포함되지 않으므로 별도 기동:
 
 ```bash
-make ps
-curl http://localhost:8005/health   # M5 gateway
-curl http://localhost:3000          # M6 UI
+# 동일 호스트에서 GPU로 띄울 때
+docker run --rm --gpus all -p 8000:8000 \
+  -v /data/models:/root/.cache/huggingface \
+  vllm/vllm-openai:latest \
+  --model Qwen/Qwen2.5-7B-Instruct --max-model-len 8192
+
+# m4가 호출하는 주소를 알려주기
+VLLM_URL=http://<vllm-host>:8000/v1 make up
 ```
 
-### 3.5 Mock 모드 (DB/모델 없이)
+### 3.8 정상 동작 체크리스트
 
-```bash
-make up-mock   # MODULE_IMPL=mock 전체, 인프라(PG/Redis)만 실제
-```
+| 명령 | 기대 응답 |
+|------|----------|
+| `make ps` | 모든 서비스 `running (healthy)` |
+| `curl localhost:8080/health` | `{"status":"ok"}` |
+| `curl localhost:8104/ready` | `{"status":"ready"}` (vLLM 살아있을 때) |
+| `curl localhost:8101/health` | `{"status":"ok"}` |
+| `localhost:3000`을 브라우저로 | 로그인 페이지 |
+| 로그인 후 메시지 전송 | 토큰 단위 SSE 스트리밍 |
 
 ---
 
@@ -137,51 +223,48 @@ make run / run-mock / test / test-cov / lint / fmt / build / clean
 
 ### 4.2 모듈별 특이사항
 
-**M1 identity** (포트 8001)
+**M1 identity** (호스트 8101)
 ```bash
 cd modules/m1-identity
-make migrate                       # 7개 테이블 + 역할 시드
-make migrate-new name="add_xxx"    # 새 migration 생성
-make run
-# MySQL 동기화 1회 수동 실행
-curl -X POST http://localhost:8001/admin/sync/mysql \
+make help                          # 타깃 목록
+# 마이그레이션은 루트에서: make migrate
+make migrate-new NAME="add_xxx"    # 새 migration 생성 (호스트 venv 필요)
+make docker-up                     # 컨테이너 기동
+# MySQL 동기화 수동 트리거
+curl -X POST http://localhost:8101/admin/sync/mysql \
   -H "Authorization: Bearer <admin_token>"
 ```
 
-**M2 doc-to-md** (포트 8002)
+**M2 doc-to-md** (호스트 8102)
 ```bash
 cd modules/m2-doc-to-md
-make pipeline       # 점진적 1회 실행
-make pipeline-full  # 강제 전체 재처리
-make run            # HTTP API + APScheduler 02:00 cron 기동
+make docker-pipeline       # 컨테이너에서 1회 실행 (권장 — /data2 마운트 사용)
+make docker-pipeline-full  # state 클리어 후 재실행
+make pipeline              # 호스트 venv에서 1회 (개발 시)
 ```
 
-**M3 chunk-embed** (포트 8003)
+**M3 chunk-embed** (호스트 8103)
 ```bash
 cd modules/m3-chunk-embed
-make migrate    # pgvector ext + chunks/documents 테이블 + ivfflat 인덱스
-make run        # 첫 요청 시 BAAI/bge-m3 자동 fetch (인터넷 필요)
+# 마이그레이션은 루트에서: make migrate
+make docker-up             # 첫 기동 시 BAAI/bge-m3 약 2.3GB 다운로드 (인터넷 필요)
 ```
 
-**M4 rag** (포트 8004) — vLLM 서버 필요
+**M4 rag** (호스트 8104) — vLLM 서버 필요 ([3.7](#37-vllm-기동-별도-호스트) 참고)
 ```bash
-# vLLM 별도 기동 예시
-docker run --gpus all -p 8000:8000 vllm/vllm-openai:latest \
-  --model Qwen/Qwen2.5-7B-Instruct
-
 cd modules/m4-rag
-VLLM_URL=http://localhost:8000/v1 make run
+make docker-up             # 첫 기동 시 reranker 약 600MB 추가 다운로드
 
-# SSE 스트리밍 테스트
-curl -N -X POST "http://localhost:8004/rag/query?stream=1" \
+# SSE 스트리밍 테스트 (m5 게이트웨이 통해야 정상; 직접 호출은 인증 우회)
+curl -N -X POST "http://localhost:8104/rag/query?stream=1" \
   -H 'Content-Type: application/json' \
   -d '{"query": "...", "top_k": 5}'
 ```
 
-**M5 gateway** (포트 8005) — 외부 진입점
+**M5 gateway** (호스트 8080) — 외부 진입점
 ```bash
 cd modules/m5-gateway
-make run   # 모든 사용자 요청은 :8005 경유
+make docker-up   # 모든 사용자 요청은 :8080 경유 (CORS allowlist 필수)
 ```
 
 **M6 ui** (포트 3000) — 사용자 채팅
@@ -195,14 +278,14 @@ make build                        # 프로덕션 빌드
 
 **M7 admin** — Backend + Frontend 분리
 ```bash
-cd modules/m7-admin/backend  && make run   # 포트 8007
-cd modules/m7-admin/frontend && make run   # 포트 3001
+cd modules/m7-admin/backend  && make docker-up   # 호스트 8107
+cd modules/m7-admin/frontend && make docker-up   # 호스트 3001
 ```
 
-**M8 web-search** (포트 8008)
+**M8 web-search** (호스트 8108)
 ```bash
 cd modules/m8-web-search
-make run
+make docker-up
 make search-once Q="p53 phase 2 clinical trial" PROVIDER=curated
 # 선택 provider: curated(기본, offline) | brave | exa | searxng
 ```
@@ -246,8 +329,10 @@ cd modules/<m> && make test-cov
 ### 6.1 이미지 빌드
 
 ```bash
-make build-images          # 전체
-cd modules/<m> && make build  # 모듈별
+make build-images               # 전체 9개 서비스
+make build-one m=m4-rag         # 단일 서비스
+make build-no-cache             # 처음부터 재빌드
+cd modules/<m> && make build    # 모듈 디렉토리에서도 가능 (compose 기반)
 ```
 
 ### 6.2 환경변수 검증
@@ -282,9 +367,11 @@ make obs-up   # Prometheus + Grafana + Loki + Promtail + Alertmanager
 
 | 서비스 | URL |
 |--------|-----|
-| Grafana | http://localhost:3001 (admin / `infra/secrets/grafana_password`) |
+| Grafana | http://localhost:3002 (admin / `infra/secrets/grafana_password`) |
 | Prometheus | http://localhost:9090 |
 | Alertmanager | http://localhost:9093 |
+
+> Grafana는 m7-admin 프론트엔드(3001)와 충돌하지 않도록 `infra/docker-compose.observability.yml`에서 3002로 publish합니다.
 
 ### 7.2 메트릭 / 알림
 
@@ -320,21 +407,29 @@ make load-spike                                  # 0→200 over 30s
 
 ```
 .
-├── modules/            # M1~M8 마이크로서비스 (각 Makefile 보유)
+├── Makefile            # 루트 오케스트레이션 (`make help` 시작점)
+├── BUILD.md            # 빌드/배포 상세 가이드
+├── README.md           # ← 이 문서 (개요)
+├── modules/            # M1~M8 마이크로서비스 (각 Makefile + Dockerfile + compose 보유)
 │   ├── m1-identity/    m2-doc-to-md/    m3-chunk-embed/    m4-rag/
 │   ├── m5-gateway/     m6-ui/           m7-admin/{backend,frontend}/
 │   └── m8-web-search/
 ├── packages/
 │   ├── contracts/      # OpenAPI SSOT (7 YAML + .sha256 락)
-│   └── shared-py/      # 공통 config / db / http / logging
+│   └── shared-py/      # 공통 config / db / http / logging (모든 백엔드 Dockerfile이 COPY)
 ├── infra/
-│   ├── docker-compose.{yml,base,mock,observability}.yml
+│   ├── docker-compose.{yml,base,mock,observability}.yml   # `${DATA_ROOT}` 바인드 마운트
 │   ├── secrets/        observability/    cron/
 ├── tests-e2e/          # testcontainers 통합 테스트
 ├── loadtest/           # locust 시나리오
 ├── scripts/            # contracts-lock / contracts-verify
-├── .github/workflows/  # CI/CD (ci, image-build, pr-checks)
-└── Makefile            # 루트 오케스트레이션
+└── .github/workflows/  # CI/CD (ci, image-build, pr-checks)
+```
+
+호스트 (저장소 외부):
+```
+/data/                  # DATA_ROOT — DB, 모델 캐시, 마크다운, state, 로그
+/data2/                 # DATA2_ROOT — 원본 입력 문서 (RO)
 ```
 
 ---

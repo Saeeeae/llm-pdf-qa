@@ -1,11 +1,12 @@
 # M1 Identity
 
-JWT-based authentication service. Issues and validates tokens for all other modules.
+JWT 인증 서비스. 모든 모듈이 사용하는 토큰을 발급/검증. M1 Postgres에 사용자/역할/부서 마스터 보유, 외부 MySQL HR 시스템에서 주기적으로 동기화.
 
-- **Port**: 8101
-- **Run**: `uvicorn app.main:app --reload --port 8101`
-- **Mock**: `MODULE_IMPL=mock uvicorn mocks.mock_server:app --port 8101`
-- **Test**: `pytest -q`
+- **Port**: 8101 (호스트), 8000 (컨테이너 내부)
+- **Run (host)**: `make run`
+- **Run (Docker)**: `make docker-up` 또는 루트의 `make up`
+- **Migration**: 루트의 `make migrate` (컨테이너 안에서 alembic 실행 — 호스트에 Python 불필요)
+- **Test**: `make test`
 
 ## MySQL Sync
 

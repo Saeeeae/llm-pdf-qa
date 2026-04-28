@@ -1,3 +1,20 @@
+# Host-side persistent storage layout (configurable via env):
+#   DATA_ROOT  (default /data)   — DBs, model cache, markdown output, logs, pipeline state
+#   DATA2_ROOT (default /data2)  — raw input documents (read-only source for m2)
+#
+# Layout under DATA_ROOT:
+#   ${DATA_ROOT}/db/postgres   — Postgres PGDATA
+#   ${DATA_ROOT}/db/neo4j      — Neo4j data
+#   ${DATA_ROOT}/db/redis      — Redis AOF/RDB
+#   ${DATA_ROOT}/models        — HuggingFace cache (HF_HOME) shared by m3, m4
+#   ${DATA_ROOT}/markdown      — m2 output, m3 input
+#   ${DATA_ROOT}/state         — m2 pipeline state, DLQ
+#   ${DATA_ROOT}/logs          — m2/m5/m7 file logs, m8 audit jsonl
+#
+# Make sure the host directories exist and are writable by the container UID:
+#   sudo mkdir -p /data/db/{postgres,neo4j,redis} /data/models /data/markdown /data/state /data/logs /data2
+#   sudo chown -R 1000:1000 /data /data2  (or whatever UID the images use)
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -5,10 +22,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ${DATA_ROOT:-/data}/db/postgres:/var/lib/postgresql/data
     networks:
       - ragnet
     healthcheck:
@@ -26,7 +44,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     volumes:
-      - neo4j_data:/data
+      - ${DATA_ROOT:-/data}/db/neo4j:/data
     networks:
       - ragnet
     healthcheck:
@@ -42,7 +60,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - ${DATA_ROOT:-/data}/db/redis:/data
     networks:
       - ragnet
     healthcheck:
@@ -50,11 +68,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-
-volumes:
-  postgres_data:
-  neo4j_data:
-  redis_data:
 
 networks:
   ragnet:

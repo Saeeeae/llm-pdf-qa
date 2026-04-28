@@ -74,13 +74,20 @@ async def chat(body: ChatRequest, request: Request):
                 params={"stream": "1"},
                 timeout=httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=5.0),
             ) as resp:
-                async for chunk in resp.aiter_text():
+                # Pass m4's SSE through verbatim. Re-wrapping each TCP chunk
+                # as `data: {token: ...}` corrupts m4's framing (event types
+                # `meta` / `sources` / `token` / `done` get embedded inside
+                # the `data:` payload of an outer `token` event, breaking the
+                # browser's EventSource parser).
+                async for chunk in resp.aiter_bytes():
                     if chunk:
-                        yield f"event: token\ndata: {json.dumps({'token': chunk, 'delta': chunk})}\n\n"
+                        yield chunk
         except asyncio.CancelledError:
-            # Client disconnected: propagate cancellation
             return
         except Exception as exc:
-            yield f"event: error\ndata: {json.dumps({'error': str(exc)})}\n\n"
+            yield (
+                "event: error\n"
+                f"data: {json.dumps({'error': str(exc)})}\n\n"
+            ).encode("utf-8")
 
     return StreamingResponse(sse_stream(), media_type="text/event-stream")

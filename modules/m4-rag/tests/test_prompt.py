@@ -1,62 +1,95 @@
-"""Prompt builder tests — context window guard and message structure."""
-import pytest
-from app.prompt import build, SYS
+"""Prompt builder + citation validator tests."""
+from app.prompt import (
+    SYS_REAL,
+    SYS_REFUSE,
+    build,
+    trim_history,
+    validate_citations,
+)
 
 
-def _src(i, text="x" * 100):
-    return {"doc_id": f"doc{i}", "chunk_idx": i, "text": text}
+def _src(i, text="x" * 100, folder=None, filename=None):
+    md = {}
+    if filename:
+        md["filename"] = filename
+    return {
+        "doc_id": f"doc{i}",
+        "chunk_idx": i,
+        "text": text,
+        "folder_path": folder,
+        "metadata": md,
+    }
 
 
-def test_system_message_first():
-    msgs = build("q", [_src(1)])
+def test_real_path_system_prompt():
+    msgs, kept = build("q", [_src(1)])
     assert msgs[0]["role"] == "system"
-    assert msgs[0]["content"] == SYS
+    assert msgs[0]["content"] == SYS_REAL
+    assert kept >= 1
 
 
-def test_user_message_last():
-    msgs = build("hello", [_src(1)])
+def test_refuse_path_when_no_sources():
+    msgs, kept = build("q", [])
+    assert msgs[0]["content"] == SYS_REFUSE
+    assert kept == 0
+    # No "Context:" prefix in refusal path
+    assert "Context" not in msgs[-1]["content"]
+
+
+def test_user_message_has_question_in_korean_label():
+    msgs, _ = build("hello", [_src(1)])
     assert msgs[-1]["role"] == "user"
-    assert "hello" in msgs[-1]["content"]
+    assert "질문: hello" in msgs[-1]["content"]
 
 
-def test_context_included():
-    src = _src(1, "unique_text_abc")
-    msgs = build("q", [src])
-    assert "unique_text_abc" in msgs[-1]["content"]
-
-
-def test_citation_format():
-    src = _src(3, "some text")
-    msgs = build("q", [src])
+def test_citation_tag_format():
+    msgs, _ = build("q", [_src(3, "some text", folder="reg/FDA", filename="a.pdf")])
     user_content = msgs[-1]["content"]
-    assert "[1] (doc:doc3#3)" in user_content
-
-
-def test_max_chars_truncates():
-    # Each source ~110 chars; limit to 200 → only first fits
-    sources = [_src(i, "x" * 100) for i in range(5)]
-    msgs = build("q", sources, max_chars=200)
-    user_content = msgs[-1]["content"]
-    # Only [1] should appear, not [3] or beyond
     assert "[1]" in user_content
-    assert "[3]" not in user_content
+    # L1 metadata leaks into the source header so the LLM can cite path/file.
+    assert "doc=doc3" in user_content
+    assert "file=a.pdf" in user_content
+    assert "folder=reg/FDA" in user_content
 
 
-def test_history_appended():
-    history = [{"role": "user", "content": "prev"}, {"role": "assistant", "content": "ans"}]
-    msgs = build("q", [_src(1)], history=history)
-    roles = [m["role"] for m in msgs]
-    assert roles == ["system", "user", "assistant", "user"]
+def test_kept_count_matches_truncation(monkeypatch):
+    # Force a tight char budget so only a subset of sources survives.
+    monkeypatch.setenv("MAX_CONTEXT_TOKENS", "700")  # tight after 600-headroom subtraction
+    monkeypatch.setenv("CHARS_PER_TOKEN", "2.0")
+    import importlib
+    import app.prompt as prompt_mod
+    importlib.reload(prompt_mod)
+
+    sources = [_src(i, "x" * 1000) for i in range(5)]
+    msgs, kept = prompt_mod.build("q", sources)
+    assert 1 <= kept < 5
 
 
-def test_history_capped_at_10():
-    history = [{"role": "user", "content": str(i)} for i in range(20)]
-    msgs = build("q", [_src(1)], history=history)
-    # system + last 10 history + user query = 12
-    assert len(msgs) == 12
+def test_history_trim_drops_oldest_when_budget_tight():
+    history = [
+        {"role": "user", "content": "old " * 1000},
+        {"role": "assistant", "content": "ans " * 1000},
+        {"role": "user", "content": "recent"},
+    ]
+    kept = trim_history(history, budget_tokens=50)
+    assert kept[-1]["content"] == "recent"
+    assert len(kept) < 3
 
 
-def test_empty_sources():
-    msgs = build("q", [])
-    assert msgs[-1]["role"] == "user"
-    assert "Question: q" in msgs[-1]["content"]
+def test_validate_citations_keeps_in_range():
+    cleaned, dropped = validate_citations("This [1] is fine [2] too.", max_valid=3)
+    assert "[1]" in cleaned and "[2]" in cleaned
+    assert dropped == []
+
+
+def test_validate_citations_drops_out_of_range():
+    cleaned, dropped = validate_citations("Real [1] hallucinated [9] mid", max_valid=3)
+    assert "[1]" in cleaned
+    assert "[9]" not in cleaned
+    assert dropped == [9]
+
+
+def test_validate_citations_empty_sources_strips_all():
+    cleaned, dropped = validate_citations("[1] [2] [3]", max_valid=0)
+    assert cleaned.strip() == ""
+    assert sorted(dropped) == [1, 2, 3]

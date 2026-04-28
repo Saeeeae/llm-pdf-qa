@@ -9,6 +9,8 @@ from typing import Any
 
 
 def audit_path() -> Path:
+    # Production default is /data/logs/... set via M8_AUDIT_LOG in docker-compose.yml.
+    # Dev fallback uses /tmp so unit tests on dev machines without /data still work.
     return Path(os.getenv("M8_AUDIT_LOG", "/tmp/m8_web_search_audit.jsonl"))
 
 

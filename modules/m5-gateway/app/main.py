@@ -2,6 +2,7 @@ import os
 import secrets
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from rag_shared.logging import setup_logging
 
@@ -29,12 +30,13 @@ setup_logging("m5-gateway")
 
 app = FastAPI(title="M5 API Gateway", version="1.0.0")
 
-# CORS
-origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+# CORS — explicit allowlist required; wildcard with credentials is invalid per CORS spec.
+origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+allow_credentials = bool(origins) and "*" not in origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=origins or ["http://m6-ui:3000"],
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -82,7 +84,14 @@ async def ready():
     failed_optional = [k for k in optional if not results[k]]
 
     if failed_critical:
-        return {"status": "unavailable", "failed": failed_critical + failed_optional}, 503
+        # Tuple-return becomes a 200-with-list payload in FastAPI; force 503.
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unavailable",
+                "failed": failed_critical + failed_optional,
+            },
+        )
     if failed_optional:
         return {"status": "degraded", "failed": failed_optional, "healthy": True}
     return {"status": "ok"}

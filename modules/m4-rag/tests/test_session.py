@@ -34,7 +34,7 @@ def _make_redis_mock(existing: list[str] | None = None):
 async def test_get_history_empty():
     """get_history returns [] when no data in Redis."""
     r, _, _ = _make_redis_mock([])
-    with patch("app.session._redis", return_value=r):
+    with patch("app.session._client", return_value=r):
         from app.session import get_history
         result = await get_history("sess-1")
     assert result == []
@@ -48,7 +48,7 @@ async def test_get_history_reverses_order():
         json.dumps({"role": "user", "content": "hello"}),
     ]
     r, _, _ = _make_redis_mock(items)
-    with patch("app.session._redis", return_value=r):
+    with patch("app.session._client", return_value=r):
         from app.session import get_history
         result = await get_history("sess-1")
     assert result[0]["role"] == "user"
@@ -59,7 +59,7 @@ async def test_get_history_reverses_order():
 async def test_add_turn_uses_pipeline():
     """add_turn calls lpush twice and sets TTL via pipeline."""
     r, _, pipe = _make_redis_mock()
-    with patch("app.session._redis", return_value=r):
+    with patch("app.session._client", return_value=r):
         from app.session import add_turn
         await add_turn("sess-2", "user question", "assistant answer")
 
@@ -81,7 +81,7 @@ async def test_add_turn_correct_content():
 
     pipe.lpush = MagicMock(side_effect=capture_lpush)
 
-    with patch("app.session._redis", return_value=r):
+    with patch("app.session._client", return_value=r):
         from app.session import add_turn
         await add_turn("sess-3", "Q", "A")
 
@@ -99,9 +99,69 @@ async def test_get_history_max_turns():
     """get_history respects MAX_TURNS*2 window."""
     items = [json.dumps({"role": "user", "content": f"msg{i}"}) for i in range(20)]
     r, _, _ = _make_redis_mock(items)
-    with patch("app.session._redis", return_value=r):
+    with patch("app.session._client", return_value=r):
         from app import session
         from app.session import get_history
         # MAX_TURNS=5 → window=10
         result = await get_history("sess-4")
     assert len(result) <= session.MAX_TURNS * 2
+
+
+@pytest.mark.asyncio
+async def test_pool_is_lazy_and_reused(monkeypatch):
+    """_client() builds the pool exactly once across calls."""
+    import redis.asyncio as aredis
+    import app.session as session
+
+    # Reset module-level pool so previous tests don't bleed in.
+    session._pool = None
+
+    create_calls = {"n": 0}
+
+    class _FakePool:
+        def __init__(self):
+            create_calls["n"] += 1
+
+        async def disconnect(self, inuse_connections=True):
+            pass
+
+    class _FakeRedis:
+        def __init__(self, connection_pool):
+            self.pool = connection_pool
+
+    # Patch the *attributes* on the real `redis.asyncio` module rather than
+    # replacing the module itself — leaves child packages (e.g. observability)
+    # importable for sibling code.
+    monkeypatch.setattr(
+        aredis.ConnectionPool, "from_url",
+        classmethod(lambda cls, *a, **k: _FakePool()),
+    )
+    monkeypatch.setattr(aredis, "Redis", _FakeRedis)
+
+    a = session._client()
+    b = session._client()
+    assert isinstance(a, _FakeRedis) and isinstance(b, _FakeRedis)
+    assert a.pool is b.pool
+    assert create_calls["n"] == 1
+    # Restore module state
+    session._pool = None
+
+
+@pytest.mark.asyncio
+async def test_aclose_pool_resets_state(monkeypatch):
+    import app.session as session
+
+    class _FakePool:
+        def __init__(self):
+            self.disconnected = False
+
+        async def disconnect(self, inuse_connections=True):
+            self.disconnected = True
+
+    fake = _FakePool()
+    session._pool = fake
+    await session.aclose_pool()
+    assert fake.disconnected is True
+    assert session._pool is None
+    # Calling again is a no-op.
+    await session.aclose_pool()

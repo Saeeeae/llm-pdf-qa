@@ -2,6 +2,7 @@ import os
 import redis.asyncio as aioredis
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from rag_shared.logging import setup_logging
 
 from .db import get_db, init_db
@@ -65,5 +66,10 @@ async def ready():
         errors.append(f"redis: {e}")
 
     if errors:
-        return {"status": "degraded", "errors": errors}, 503
+        # Returning a tuple makes FastAPI serialize it as a 200 list. Use
+        # JSONResponse so orchestrators see the actual 503.
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "errors": errors},
+        )
     return {"status": "ok"}

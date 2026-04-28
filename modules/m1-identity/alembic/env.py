@@ -11,9 +11,11 @@ if config.config_file_name:
 from app.models import Base
 target_metadata = Base.metadata
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    config.get_main_option("sqlalchemy.url")
+# Container compose sets POSTGRES_URL; DATABASE_URL kept as legacy fallback.
+DATABASE_URL = (
+    os.getenv("POSTGRES_URL")
+    or os.getenv("DATABASE_URL")
+    or config.get_main_option("sqlalchemy.url")
 )
 
 

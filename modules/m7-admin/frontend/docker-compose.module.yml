@@ -1,0 +1,18 @@
+services:
+  m7-admin-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_ADMIN_API_BASE: ${NEXT_PUBLIC_ADMIN_API_BASE:-http://m7-admin:8000}
+    ports:
+      - "3001:3001"
+    environment:
+      NEXT_PUBLIC_ADMIN_API_BASE: ${NEXT_PUBLIC_ADMIN_API_BASE:-http://m7-admin:8000}
+      NODE_ENV: production
+    networks:
+      - ragnet
+
+networks:
+  ragnet:
+    external: true

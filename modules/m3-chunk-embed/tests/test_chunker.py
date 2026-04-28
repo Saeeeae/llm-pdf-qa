@@ -1,63 +1,157 @@
-"""Unit tests for Chunker using a mock tokenizer — no model download."""
+"""Hierarchical / heading-aware / sentence-aware chunker tests.
+
+Bypasses the real tokenizer: each Unicode codepoint counts as one token id,
+which keeps assertions on chunk boundaries deterministic.
+"""
 import hashlib
+
 import pytest
+
+from app.chunker import (
+    Chunker,
+    LeafChunk,
+    ParentChunk,
+    split_sections,
+    split_sentences,
+)
 
 
 class _FakeTok:
-    """Minimal tokenizer: each character is a token id (its ordinal)."""
-
     def encode(self, text, add_special_tokens=False):
-        return list(text.encode("utf-8"))
+        return [ord(c) for c in text]
 
     def decode(self, ids):
-        return bytes(ids).decode("utf-8", errors="replace")
+        return "".join(chr(i) for i in ids)
 
 
-def _make_chunker(chunk_size=10, overlap=2):
-    from app.chunker import Chunker
+def _make_chunker(parent_size=20, parent_overlap=4, leaf_size=6, leaf_overlap=2):
     c = Chunker.__new__(Chunker)
     c.tok = _FakeTok()
-    c.chunk_size = chunk_size
-    c.overlap = overlap
+    c.parent_size = parent_size
+    c.parent_overlap = parent_overlap
+    c.leaf_size = leaf_size
+    c.leaf_overlap = leaf_overlap
     return c
 
 
-def test_chunk_basic():
-    chunker = _make_chunker(chunk_size=10, overlap=2)
-    text = "A" * 30
-    pieces = chunker.chunk(text)
-    assert len(pieces) > 1
-    for txt, h in pieces:
-        assert h == hashlib.sha256(txt.encode()).hexdigest()
-        assert txt  # non-empty
+# ─── Section split ────────────────────────────────────────────────────────
+def test_split_sections_no_headings_single_section():
+    out = split_sections("just some prose without headings.")
+    assert len(out) == 1
+    assert out[0][0] == ""  # empty heading_path
+    assert "prose" in out[0][1]
 
 
-def test_chunk_empty():
-    chunker = _make_chunker()
-    assert chunker.chunk("") == []
-    assert chunker.chunk("   ") == []
+def test_split_sections_basic_heading_path():
+    md = "# A\nbody-a\n## B\nbody-b\n## C\nbody-c"
+    out = split_sections(md)
+    paths = [p for p, _ in out]
+    assert paths == ["A", "A > B", "A > C"]
 
 
-def test_chunk_short_text():
-    chunker = _make_chunker(chunk_size=100, overlap=10)
-    text = "hello world"
-    pieces = chunker.chunk(text)
-    assert len(pieces) == 1
-    assert pieces[0][0] == "hello world"
+def test_split_sections_handles_code_fence():
+    # `# Not a heading` lives inside a fenced code block and must NOT split.
+    md = "# Real\nintro\n```\n# Not a heading\n```\n## Sub\nsubbody"
+    out = split_sections(md)
+    paths = [p for p, _ in out]
+    assert paths == ["Real", "Real > Sub"]
 
 
-def test_chunk_hash_uniqueness():
-    chunker = _make_chunker(chunk_size=8, overlap=0)
-    text = "abcdefghijklmnopqrstuvwxyz"
-    pieces = chunker.chunk(text)
-    hashes = [h for _, h in pieces]
-    assert len(hashes) == len(set(hashes)), "duplicate hashes for distinct chunks"
+def test_split_sections_empty_input():
+    assert split_sections("") == []
+    assert split_sections("   \n  \n") == []
 
 
-def test_chunk_overlap_produces_overlap():
-    chunker = _make_chunker(chunk_size=6, overlap=2)
-    # 12 bytes → step=4 → starts at 0, 4, 8
-    text = "abcdefghijkl"
-    pieces = chunker.chunk(text)
-    # chunk 0: bytes 0-5, chunk 1: bytes 4-9, chunk 2: bytes 8-13(clamped)
-    assert pieces[0][0][:4] == pieces[1][0][:4] or len(pieces) >= 2
+# ─── Sentence split ───────────────────────────────────────────────────────
+def test_split_sentences_english_basic():
+    s = split_sentences("Hello world. How are you? I am fine!")
+    assert len(s) == 3
+    assert s[0].endswith(".")
+    assert s[1].endswith("?")
+    assert s[2].endswith("!")
+
+
+def test_split_sentences_korean_punct():
+    s = split_sentences("안녕하세요. 잘 지내시나요? 네! 감사합니다.")
+    assert len(s) == 4
+
+
+def test_split_sentences_cjk_full_stop():
+    s = split_sentences("第一句。第二句。第三句")
+    assert len(s) == 3
+
+
+def test_split_sentences_newline_acts_as_boundary():
+    s = split_sentences("A\nB\nC")
+    assert s == ["A", "B", "C"]
+
+
+# ─── Hierarchical chunking ────────────────────────────────────────────────
+def test_chunk_empty_returns_empty():
+    c = _make_chunker()
+    parents, leaves = c.chunk("")
+    assert parents == []
+    assert leaves == []
+
+
+def test_chunk_short_text_single_section():
+    c = _make_chunker(parent_size=20, parent_overlap=4, leaf_size=6, leaf_overlap=2)
+    parents, leaves = c.chunk("hi")
+    assert len(parents) >= 1
+    assert len(leaves) >= 1
+    assert all(isinstance(p, ParentChunk) for p in parents)
+    assert all(isinstance(l, LeafChunk) for l in leaves)
+
+
+def test_chunk_long_text_multiple_chunks():
+    c = _make_chunker(parent_size=10, parent_overlap=2, leaf_size=4, leaf_overlap=1)
+    text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    parents, leaves = c.chunk(text)
+    assert len(parents) >= 2
+    assert len(leaves) > len(parents)
+
+
+def test_chunk_with_headings_propagates_heading_path():
+    c = _make_chunker(parent_size=20, parent_overlap=2, leaf_size=6, leaf_overlap=1)
+    md = "# Top\nABCDEFGHIJ\n## Sub\nKLMNOPQR"
+    parents, leaves = c.chunk(md)
+    paths_p = {p.metadata.get("heading_path") for p in parents}
+    paths_l = {l.metadata.get("heading_path") for l in leaves}
+    # Both `Top` and `Top > Sub` should appear at parent and leaf level.
+    assert "Top" in paths_p
+    assert "Top > Sub" in paths_p
+    assert "Top" in paths_l
+    assert "Top > Sub" in paths_l
+
+
+def test_chunk_leaf_hash_uniqueness():
+    c = _make_chunker(parent_size=20, parent_overlap=2, leaf_size=4, leaf_overlap=0)
+    _, leaves = c.chunk("abcdefghijklmnopqrstuvwxyz")
+    hashes = [l.chunk_hash for l in leaves]
+    assert len(hashes) == len(set(hashes))
+    for l in leaves:
+        assert l.chunk_hash == hashlib.sha256(l.text.encode()).hexdigest()
+
+
+def test_chunk_leaf_parent_idx_in_range():
+    c = _make_chunker(parent_size=10, parent_overlap=2, leaf_size=4, leaf_overlap=1)
+    parents, leaves = c.chunk("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    parent_ids = {p.idx for p in parents}
+    for leaf in leaves:
+        assert leaf.parent_idx in parent_ids
+
+
+def test_chunk_sentence_boundary_snap():
+    """When a sentence ends inside the size budget, the chunk should stop there."""
+    c = _make_chunker(parent_size=20, parent_overlap=2, leaf_size=10, leaf_overlap=2)
+    # 'Hello.' = 6 codepoints; 'World.' = 6; together 12 chars + space = 13.
+    parents, leaves = c.chunk("Hello. World. Bye.")
+    # At least one parent should end exactly at a '.' character.
+    assert any(p.text.rstrip().endswith(".") for p in parents)
+
+
+def test_chunk_overlap_validation_constructor():
+    with pytest.raises(ValueError):
+        Chunker(parent_size=10, parent_overlap=10, leaf_size=4, leaf_overlap=1)
+    with pytest.raises(ValueError):
+        Chunker(parent_size=4, parent_overlap=1, leaf_size=4, leaf_overlap=1)

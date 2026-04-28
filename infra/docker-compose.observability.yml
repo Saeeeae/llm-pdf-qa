@@ -23,7 +23,8 @@ services:
     secrets:
       - grafana_password
     ports:
-      - "3001:3000"
+      # m7-admin/frontend uses 3001 — expose Grafana on 3002 to avoid clash.
+      - "3002:3000"
     restart: unless-stopped
     depends_on:
       - prometheus

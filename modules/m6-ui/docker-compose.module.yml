@@ -1,0 +1,19 @@
+services:
+  m6-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # baked into the JS bundle at build time
+        NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://m5-gateway:8000}
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: ${NEXT_PUBLIC_API_BASE:-http://m5-gateway:8000}
+      NODE_ENV: production
+    networks:
+      - ragnet
+
+networks:
+  ragnet:
+    external: true

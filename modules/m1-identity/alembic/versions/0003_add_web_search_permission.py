@@ -8,8 +8,8 @@ Create Date: 2026-04-24
 from alembic import op
 
 
-revision = "0003_add_web_search_permission"
-down_revision = "0002_add_external_id"
+revision = "0003"
+down_revision = "0002"
 branch_labels = None
 depends_on = None
 
