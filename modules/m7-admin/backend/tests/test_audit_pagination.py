@@ -1,5 +1,5 @@
 """test_audit_pagination.py — pagination and filter params for audit-log endpoint."""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 from app.main import app
 

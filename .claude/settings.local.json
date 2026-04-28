@@ -16,7 +16,8 @@
       "Bash(/tmp/docker_analysis.txt:*)",
       "Read(//tmp/**)",
       "Bash(git commit:*)",
-      "Bash(find /Users/sae/Desktop/llm_again -maxdepth 2 -type f \\\\\\( -name \"*.yml\" -o -name \"*.yaml\" \\\\\\) ! -path \"*/node_modules/*\" ! -path \"*/.git/*\" 2>/dev/null | xargs grep -l \"app\\\\|celery-beat\\\\|celery-worker\\\\|requirements/\\\\|init\\\\.sql\\\\|scripts/\" 2>/dev/null)"
+      "Bash(find /Users/sae/Desktop/llm_again -maxdepth 2 -type f \\\\\\( -name \"*.yml\" -o -name \"*.yaml\" \\\\\\) ! -path \"*/node_modules/*\" ! -path \"*/.git/*\" 2>/dev/null | xargs grep -l \"app\\\\|celery-beat\\\\|celery-worker\\\\|requirements/\\\\|init\\\\.sql\\\\|scripts/\" 2>/dev/null)",
+      "Bash(xargs -I {} sh -c 'echo \"=== {} ===\"; cat {}')"
     ]
   }
 }

@@ -1,7 +1,7 @@
 """Admin endpoints for MySQL sync management."""
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,7 +34,6 @@ async def trigger_sync(
 
 async def _bg_sync(run_id: int):
     import logging
-    import os
     from sqlalchemy import update
     from ..db import AsyncSessionLocal
     from ..models import SyncRun as SR
@@ -76,7 +75,6 @@ async def sync_status(
 ):
     """Last sync run report + next scheduled run time."""
     import os
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     result = await db.execute(select(SyncRun).order_by(desc(SyncRun.started_at)).limit(1))
     last = result.scalar_one_or_none()

@@ -1,14 +1,34 @@
+"""Query-side embedder for m4-rag.
+
+Mirrors m3's device resolution: explicit > EMBED_DEVICE env > auto-detect.
+"""
+from __future__ import annotations
+
 import os
-from typing import List
+from typing import List, Optional
+
+
+def _resolve_device(requested: Optional[str]) -> str:
+    if requested and requested != "auto":
+        return requested
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda:0"
+    except Exception:
+        pass
+    return "cpu"
 
 
 class QueryEmbedder:
-    _instance = None
+    _instance: Optional["QueryEmbedder"] = None
 
     def __init__(self):
-        # Lazy import: model loaded once at first encode call
         from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer(os.getenv("EMBED_MODEL", "BAAI/bge-m3"))
+        model_name = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+        device = _resolve_device(os.getenv("EMBED_DEVICE"))
+        self.model = SentenceTransformer(model_name, device=device)
+        self.device = device
 
     @classmethod
     def get(cls) -> "QueryEmbedder":

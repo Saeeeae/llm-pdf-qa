@@ -33,7 +33,17 @@ fmt: ## prettier
 clean: ## Remove .next, node_modules, build artifacts
 	rm -rf .next node_modules .turbo dist
 
-docker-build: ## Build docker image
-	docker build -t rag-$(MODULE_NAME):local .
+# ─── Docker (image baked at build time with NEXT_PUBLIC_API_BASE) ───────────
+docker-build: ## Build docker image via compose (honors NEXT_PUBLIC_API_BASE)
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml build
 
-.PHONY: help install run build start test lint fmt clean docker-build
+docker-up: ## Run UI in container (assumes m5-gateway is reachable)
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml up -d --build
+
+docker-down: ## Stop UI container
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml down
+
+docker-logs: ## Tail container logs
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml logs -f
+
+.PHONY: help install run build start test lint fmt clean docker-build docker-up docker-down docker-logs

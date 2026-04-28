@@ -59,7 +59,7 @@ class CuratedBioProvider(SearchProvider):
             ),
             SearchResult(
                 title=f"openFDA search: {safe_query}",
-                url=f"https://open.fda.gov/apis/",
+                url="https://open.fda.gov/apis/",
                 snippet="openFDA public API index for drug, device, food, and safety datasets.",
                 source="openfda",
                 fetched_at=now,
@@ -102,7 +102,7 @@ class BraveProvider(SearchProvider):
         key = os.getenv("BRAVE_SEARCH_API_KEY")
         if not key:
             raise ProviderError("BRAVE_SEARCH_API_KEY is not configured")
-        params = {
+        params: dict[str, str | int] = {
             "q": safe_query,
             "count": min(req.max_results, 20),
             "search_lang": req.locale.split("-")[0] if req.locale else "ko",

@@ -1,7 +1,19 @@
-import hashlib
+import os
 from typing import List, Optional
 
-_MODEL_NAME = "BAAI/bge-m3"
+_MODEL_NAME = os.getenv("EMBED_MODEL", "BAAI/bge-m3")
+
+
+def _resolve_device(requested: Optional[str]) -> str:
+    if requested and requested != "auto":
+        return requested
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda:0"
+    except Exception:
+        pass
+    return "cpu"
 
 
 def _safe_batch_size(default: int = 32) -> int:
@@ -20,11 +32,13 @@ def _safe_batch_size(default: int = 32) -> int:
 
 
 class Embedder:
-    def __init__(self, model_name: str = _MODEL_NAME, device: str = "cuda:0"):
+    def __init__(self, model_name: str = _MODEL_NAME, device: Optional[str] = None):
         # Import deferred so startup doesn't fail when torch/sentence-transformers
         # are not installed or the model hasn't been downloaded yet.
         from sentence_transformers import SentenceTransformer
-        self.model = SentenceTransformer(model_name, device=device)
+        resolved = _resolve_device(device or os.getenv("EMBED_DEVICE"))
+        self.model = SentenceTransformer(model_name, device=resolved)
+        self.device = resolved
         self.dim = 1024
 
     def encode(self, texts: List[str], batch_size: Optional[int] = None) -> List[List[float]]:

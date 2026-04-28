@@ -1,7 +1,7 @@
 # Module Makefile - m7-admin-backend
 PY ?= python3
 PIP ?= pip
-PORT ?= 8007
+PORT ?= 8107
 MODULE_NAME = m7-admin-backend
 
 .DEFAULT_GOAL := help
@@ -35,11 +35,20 @@ fmt: ## ruff format
 migrate: ## no alembic in this module
 	@echo "no alembic"
 
-build: ## Build docker image
-	docker build -t rag-$(MODULE_NAME):local .
+build: ## Build docker image (uses repo root as context)
+	cd ../../.. && docker compose -f modules/m7-admin/backend/docker-compose.module.yml build
+
+docker-up: ## Run this module + base infra in containers
+	cd ../../.. && docker compose -f infra/docker-compose.base.yml -f modules/m7-admin/backend/docker-compose.module.yml up -d --build
+
+docker-down: ## Stop this module's containers
+	cd ../../.. && docker compose -f modules/m7-admin/backend/docker-compose.module.yml down
+
+docker-logs: ## Tail container logs
+	cd ../../.. && docker compose -f modules/m7-admin/backend/docker-compose.module.yml logs -f
 
 clean: ## Remove caches and build artifacts
 	rm -rf __pycache__ .pytest_cache .ruff_cache .mypy_cache *.egg-info build dist
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-.PHONY: help install run run-mock test test-cov lint fmt migrate build clean
+.PHONY: help install run run-mock test test-cov lint fmt migrate build docker-up docker-down docker-logs clean

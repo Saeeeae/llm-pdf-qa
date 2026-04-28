@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Sequence
 from fastapi import Depends, HTTPException, status
 from .jwt import get_current_user
 

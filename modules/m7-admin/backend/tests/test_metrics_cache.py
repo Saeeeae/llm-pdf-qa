@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 async def test_cache_hit_returns_cached_value():
     """cache_get should return parsed dict on hit."""
     import json
-    from app.cache import cache_get, cache_set
+    from app.cache import cache_get
 
     mock_redis = AsyncMock()
     mock_redis.get = AsyncMock(return_value=json.dumps({"utilization_pct": 42.0}))

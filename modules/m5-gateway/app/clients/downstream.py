@@ -1,4 +1,3 @@
-import asyncio
 import os
 import time
 from enum import Enum
@@ -90,7 +89,10 @@ async def proxy_request(
         timeout = httpx.Timeout(connect=3.0, read=10.0, write=10.0, pool=5.0)
 
     body = await request.body()
-    _STRIP = {"host", "content-length", "authorization"}
+    # Strip hop-by-hop headers but PRESERVE Authorization — internal services
+    # (m1, m4, m7, m8) decode the JWT to identify the caller. Stripping it
+    # would make every downstream `get_current_user` 401.
+    _STRIP = {"host", "content-length"}
     headers = {k: v for k, v in request.headers.items() if k.lower() not in _STRIP}
     downstream_auth_token = os.getenv("DOWNSTREAM_SERVICE_TOKEN")
     if downstream_auth_token:

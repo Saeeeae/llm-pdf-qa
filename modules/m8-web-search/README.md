@@ -30,12 +30,13 @@ curl -X POST http://localhost:8108/web-search/search \
 ## Make targets
 
 ```bash
+make help
 make search-once Q="p53 phase 2 clinical trial" PROVIDER=curated
 make crawl-curated
 make crawl-allowlist DOMAINS=nih.gov,fda.gov
-make dlp-test
-make eval-web
-make cache-prune
+make build              # Docker image (uses repo-root context)
+make docker-up          # run in container with audit log mounted to /data/logs
+make test
 ```
 
 ## Provider notes

@@ -1,3 +1,10 @@
+# Top-level orchestration for all 8 modules.
+# Persistent storage uses two host roots:
+#   DATA_ROOT  (default /data)   — DBs, model cache, markdown, state, logs (writable)
+#   DATA2_ROOT (default /data2)  — raw input documents (read-only source)
+#
+# Override via .env file at repo root or shell env:
+#   DATA_ROOT=/mnt/nvme/rag DATA2_ROOT=/mnt/nas/docs docker compose -f infra/docker-compose.yml up -d
 include:
   - docker-compose.base.yml
   - ../modules/m1-identity/docker-compose.module.yml
@@ -5,8 +12,10 @@ include:
   - ../modules/m3-chunk-embed/docker-compose.module.yml
   - ../modules/m4-rag/docker-compose.module.yml
   - ../modules/m5-gateway/docker-compose.module.yml
+  - ../modules/m6-ui/docker-compose.module.yml
   - ../modules/m8-web-search/docker-compose.module.yml
   - ../modules/m7-admin/backend/docker-compose.module.yml
+  - ../modules/m7-admin/frontend/docker-compose.module.yml
 
 secrets:
   jwt_secret:
@@ -27,6 +36,8 @@ services:
     environment:
       JWT_SECRET_FILE: /run/secrets/jwt_secret
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_URL: ${M1_POSTGRES_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/ragdb}
+      REDIS_URL: ${M1_REDIS_URL:-redis://redis:6379/0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
@@ -40,6 +51,22 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      # input documents (read-only)
+      - ${DATA2_ROOT:-/data2}:/data2:ro
+      # markdown output (shared with m3 as input)
+      - ${DATA_ROOT:-/data}/markdown:/data/markdown
+      # pipeline state + DLQ
+      - ${DATA_ROOT:-/data}/state/m2:/data/state
+      # logs
+      - ${DATA_ROOT:-/data}/logs/m2:/data/logs
+    environment:
+      M2_SOURCE_DIR: /data2
+      M2_OUTPUT_DIR: /data/markdown
+      M2_STATE_DIR: /data/state
+      M2_LOG_DIR: /data/logs
+      REDIS_URL: ${M2_REDIS_URL:-redis://redis:6379/0}
+      M3_API_URL: ${M3_API_URL:-http://m3-chunk-embed:8000}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
@@ -53,6 +80,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      # markdown input (read-only — m2 writes, m3 reads)
+      - ${DATA_ROOT:-/data}/markdown:/data/markdown:ro
+      # HuggingFace model cache (BGE-M3, etc.)
+      - ${DATA_ROOT:-/data}/models:/data/models
     deploy:
       resources:
         reservations:
@@ -63,6 +95,18 @@ services:
     environment:
       CUDA_VISIBLE_DEVICES: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
+      HF_HOME: /data/models
+      TRANSFORMERS_CACHE: /data/models
+      SENTENCE_TRANSFORMERS_HOME: /data/models
+      POSTGRES_URL: ${M3_POSTGRES_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/ragdb}
+      REDIS_URL: ${M3_REDIS_URL:-redis://redis:6379/0}
+      EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-m3}
+      EMBED_DEVICE: ${EMBED_DEVICE:-auto}
+      PARENT_CHUNK_SIZE: ${PARENT_CHUNK_SIZE:-1024}
+      PARENT_CHUNK_OVERLAP: ${PARENT_CHUNK_OVERLAP:-100}
+      CHUNK_SIZE: ${CHUNK_SIZE:-256}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-32}
+      M3_MAX_CONCURRENT: ${M3_MAX_CONCURRENT:-2}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
@@ -76,6 +120,9 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      # shared HF model cache (query embedder)
+      - ${DATA_ROOT:-/data}/models:/data/models
     deploy:
       resources:
         reservations:
@@ -86,6 +133,29 @@ services:
     environment:
       CUDA_VISIBLE_DEVICES: "0"
       NVIDIA_VISIBLE_DEVICES: "0"
+      HF_HOME: /data/models
+      TRANSFORMERS_CACHE: /data/models
+      SENTENCE_TRANSFORMERS_HOME: /data/models
+      POSTGRES_URL: ${M4_POSTGRES_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/ragdb}
+      REDIS_URL: ${M4_REDIS_URL:-redis://redis:6379/0}
+      VLLM_URL: ${VLLM_URL:-http://vllm:8000/v1}
+      VLLM_MODEL: ${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      MAX_CONTEXT_TOKENS: ${MAX_CONTEXT_TOKENS:-6000}
+      CHARS_PER_TOKEN: ${CHARS_PER_TOKEN:-2.0}
+      HISTORY_TOKEN_BUDGET: ${HISTORY_TOKEN_BUDGET:-1500}
+      MAX_HISTORY_TURNS: ${MAX_HISTORY_TURNS:-10}
+      EMBED_MODEL: ${EMBED_MODEL:-BAAI/bge-m3}
+      EMBED_DEVICE: ${EMBED_DEVICE:-auto}
+      USE_RERANKER: ${USE_RERANKER:-1}
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      RERANK_DEVICE: ${RERANK_DEVICE:-auto}
+      RERANK_ALPHA: ${RERANK_ALPHA:-0.7}
+      RETRIEVE_K: ${RETRIEVE_K:-40}
+      RERANK_K: ${RERANK_K:-8}
+      RRF_K: ${RRF_K:-60}
+      VEC_WEIGHT: ${VEC_WEIGHT:-1.0}
+      BM25_WEIGHT: ${BM25_WEIGHT:-1.0}
+      MMR_LAMBDA: ${MMR_LAMBDA:-0.5}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
@@ -100,8 +170,12 @@ services:
       redis:
         condition: service_healthy
     secrets: [jwt_secret]
+    volumes:
+      - ${DATA_ROOT:-/data}/logs/m5:/data/logs
     environment:
       JWT_SECRET_FILE: /run/secrets/jwt_secret
+      REDIS_URL: ${M5_REDIS_URL:-redis://redis:6379/0}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://m6-ui:3000}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
@@ -116,9 +190,14 @@ services:
       redis:
         condition: service_healthy
     secrets: [jwt_secret, postgres_password]
+    volumes:
+      - ${DATA_ROOT:-/data}/logs/m7:/data/logs
     environment:
       JWT_SECRET_FILE: /run/secrets/jwt_secret
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_URL: ${M7_POSTGRES_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/ragdb}
+      POSTGRES_RO_URL: ${M7_POSTGRES_RO_URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/ragdb}
+      REDIS_URL: ${M7_REDIS_URL:-redis://redis:6379/0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
@@ -131,19 +210,16 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - audit_logs:/var/log/rag-audit
+      - ${DATA_ROOT:-/data}/logs/m8:/data/logs
     environment:
-      M8_AUDIT_LOG: /var/log/rag-audit/m8-web-search.jsonl
+      M8_AUDIT_LOG: /data/logs/m8-web-search.jsonl
+      REDIS_URL: ${M8_REDIS_URL:-redis://redis:6379/0}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 30s
-
-volumes:
-  audit_logs:
-    driver: local
 
 networks:
   ragnet:

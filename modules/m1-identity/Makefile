@@ -1,7 +1,9 @@
 # Module Makefile - m1-identity
+# PORT matches the Docker-published port so `make run` and `make docker-up`
+# expose the service at the same host:port.
 PY ?= python3
 PIP ?= pip
-PORT ?= 8001
+PORT ?= 8101
 MODULE_NAME = m1-identity
 
 .DEFAULT_GOAL := help
@@ -32,21 +34,32 @@ lint: ## ruff check + mypy
 fmt: ## ruff format
 	ruff format app/ tests/
 
-migrate: ## alembic upgrade head
-	alembic upgrade head
+# ─── Migrations (run inside the module container; needs postgres up) ────────
+migrate: ## alembic upgrade head (in container)
+	cd ../.. && docker compose -f infra/docker-compose.yml up -d postgres
+	cd ../.. && docker compose -f infra/docker-compose.yml run --rm m1-identity alembic upgrade head
 
-migrate-new: ## NAME=description make migrate-new
+migrate-new: ## NAME=description (revision generated from host venv; needs editable install)
 	@test -n "$(NAME)" || (echo "NAME=description required"; exit 1)
 	alembic revision --autogenerate -m "$(NAME)"
 
-migrate-down: ## Rollback last migration
-	alembic downgrade -1
+migrate-down: ## Rollback last migration (in container)
+	cd ../.. && docker compose -f infra/docker-compose.yml run --rm m1-identity alembic downgrade -1
 
-build: ## Build docker image
-	docker build -t rag-$(MODULE_NAME):local .
+build: ## Build docker image (uses repo root as context)
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml build
+
+docker-up: ## Run this module + base infra in containers
+	cd ../.. && docker compose -f infra/docker-compose.base.yml -f modules/$(MODULE_NAME)/docker-compose.module.yml up -d --build
+
+docker-down: ## Stop this module's containers (base infra kept)
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml down
+
+docker-logs: ## Tail container logs
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml logs -f
 
 clean: ## Remove caches and build artifacts
 	rm -rf __pycache__ .pytest_cache .ruff_cache .mypy_cache *.egg-info build dist
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-.PHONY: help install run run-mock test test-cov lint fmt migrate migrate-new migrate-down build clean
+.PHONY: help install run run-mock test test-cov lint fmt migrate migrate-new migrate-down build docker-up docker-down docker-logs clean

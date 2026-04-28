@@ -3,9 +3,6 @@ Integration-style tests for the /chunk-embed and /status endpoints.
 Uses AsyncMock for DB and mock Embedder/Chunker (injected by conftest.py).
 No real DB or GPU required.
 """
-import asyncio
-import hashlib
-import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
@@ -13,10 +10,19 @@ from fastapi.testclient import TestClient
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _make_fake_session(rows=None):
-    """Return an async context-manager mock that acts as AsyncSession."""
+_SENTINEL = object()
+
+
+def _make_fake_session(rows=_SENTINEL):
+    """Return an async context-manager mock that acts as AsyncSession.
+
+    `first()` returns the same row for every call. Default `(1,)` so router
+    paths that use `INSERT ... RETURNING id` get a usable id back. Pass
+    `rows=None` to simulate "no rows" or a custom tuple for specific shapes.
+    """
+    default_row = (1,) if rows is _SENTINEL else rows
     execute_result = MagicMock()
-    execute_result.first.return_value = rows  # for SELECT queries
+    execute_result.first.return_value = default_row
     session = AsyncMock()
     session.execute = AsyncMock(return_value=execute_result)
     session.commit = AsyncMock()
@@ -57,7 +63,6 @@ def test_status_not_found():
 
 def test_status_found():
     from app.main import app
-    from fastapi import Depends
 
     async def _fake_db():
         session = AsyncMock()

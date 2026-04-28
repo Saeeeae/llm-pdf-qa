@@ -1,4 +1,4 @@
-from typing import Optional, Any
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from .models import AuditLog
 

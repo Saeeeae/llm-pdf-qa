@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional, Any
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, ForeignKey, Index,
-    Integer, JSON, String, Text, UniqueConstraint, func
+    Integer, String, Text, UniqueConstraint, func
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -12,8 +12,8 @@ _TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 if _TEST_MODE:
     from sqlalchemy import JSON as JSONB
     # SQLite doesn't support BigInteger autoincrement — use Integer
-    PkCol = Integer
-    FkType = Integer
+    PkCol: type = Integer
+    FkType: type = Integer
 else:
     from sqlalchemy.dialects.postgresql import JSONB  # noqa: F811
     PkCol = BigInteger

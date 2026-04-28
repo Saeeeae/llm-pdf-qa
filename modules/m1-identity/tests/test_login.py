@@ -29,7 +29,6 @@ async def test_login_unknown_user(ctx):
 async def test_login_lockout_after_5_fails(ctx):
     """After 5 failures Redis counter triggers 429."""
     client, session, user, role = ctx
-    LOCKOUT_FAILS = 5
 
     with patch("app.routers.auth._redis") as mock_redis_factory:
         mock_r = AsyncMock()

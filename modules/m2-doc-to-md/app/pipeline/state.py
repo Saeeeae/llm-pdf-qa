@@ -2,7 +2,9 @@ import json
 import os
 from pathlib import Path
 
-STATE_FILE = Path(__file__).resolve().parents[2] / ".pipeline_state.json"
+_DEFAULT_STATE_DIR = Path(__file__).resolve().parents[2]
+STATE_DIR = Path(os.getenv("M2_STATE_DIR", _DEFAULT_STATE_DIR))
+STATE_FILE = STATE_DIR / ".pipeline_state.json"
 
 
 def load_state() -> dict:
@@ -14,5 +16,7 @@ def load_state() -> dict:
 
 def save_state(state: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(tmp, STATE_FILE)

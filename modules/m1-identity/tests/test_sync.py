@@ -8,7 +8,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy import select
 
-from app.models import Base, Department, Role, User, SyncRun
+from app.models import Base, Department, Role, User
 from app.sync.syncer import run_sync
 
 
@@ -160,7 +160,6 @@ async def test_sync_legacy_hash_upgrade(session):
 @pytest.mark.asyncio
 async def test_sync_concurrent_lock(monkeypatch):
     """Second concurrent run is blocked when Redis lock is held."""
-    held = []
 
     # Simulate lock already held: set() returns None (NX failed)
     class FakeRedis:

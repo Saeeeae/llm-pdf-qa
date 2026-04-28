@@ -16,9 +16,11 @@ from app.metrics import conversion_duration, documents_processed, m3_trigger_lat
 MODULE_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = MODULE_ROOT.parents[1]
 
-SOURCE_DIR = Path(os.getenv("M2_SOURCE_DIR", PROJECT_ROOT / "data" / "documents"))
-OUTPUT_DIR = Path(os.getenv("M2_OUTPUT_DIR", PROJECT_ROOT / "data" / "markdown"))
-LOG_DIR = MODULE_ROOT / "logs"
+# In Docker we mount /data2 (read-only sources) and /data/markdown (output).
+# For local dev fall back to repo-relative paths under PROJECT_ROOT/data/.
+SOURCE_DIR = Path(os.getenv("M2_SOURCE_DIR") or (PROJECT_ROOT / "data" / "documents"))
+OUTPUT_DIR = Path(os.getenv("M2_OUTPUT_DIR") or (PROJECT_ROOT / "data" / "markdown"))
+LOG_DIR = Path(os.getenv("M2_LOG_DIR") or (MODULE_ROOT / "logs"))
 M3_URL = os.getenv("M3_API_URL")
 
 

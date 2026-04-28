@@ -1,13 +1,18 @@
 """test_ws.py — WebSocket admin events endpoint."""
 import json
 import os
-import asyncio
-from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
-from jose import jwt
-from fastapi.testclient import TestClient
-from app.main import app
+# Production default disables `?token=` query-param auth (token leaks to access
+# logs). The TestClient's websocket_connect can't easily set the Authorization
+# header, so we opt-in to query-param auth for the test suite only.
+os.environ.setdefault("WS_ALLOW_QUERY_TOKEN", "1")
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+import pytest  # noqa: E402
+from jose import jwt  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from app.main import app  # noqa: E402
 
 
 def _admin_token() -> str:

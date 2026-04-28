@@ -1,7 +1,7 @@
 # Module Makefile - m2-doc-to-md
 PY ?= python3
 PIP ?= pip
-PORT ?= 8002
+PORT ?= 8102
 MODULE_NAME = m2-doc-to-md
 
 .DEFAULT_GOAL := help
@@ -35,17 +35,32 @@ fmt: ## ruff format
 migrate: ## no alembic in this module
 	@echo "no alembic"
 
-pipeline: ## Run document-to-markdown pipeline once (incremental)
+pipeline: ## Host: incremental pipeline run (requires editable install + /data2 + /data dirs)
 	$(PY) -m app.pipeline.run
 
-pipeline-full: ## Force full re-run (clears state)
+pipeline-full: ## Host: clear state then run (requires .pipeline_state.json under M2_STATE_DIR or module root)
 	rm -f .pipeline_state.json && $(PY) -m app.pipeline.run
 
-build: ## Build docker image
-	docker build -t rag-$(MODULE_NAME):local .
+docker-pipeline: ## Container: incremental pipeline run inside m2 image (uses mounted /data2)
+	cd ../.. && docker compose -f infra/docker-compose.yml run --rm m2-doc-to-md python -m app.pipeline.run
+
+docker-pipeline-full: ## Container: clear state in mounted /data/state then re-run
+	cd ../.. && docker compose -f infra/docker-compose.yml run --rm m2-doc-to-md sh -c "rm -f /data/state/.pipeline_state.json && python -m app.pipeline.run"
+
+build: ## Build docker image (uses repo root as context)
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml build
+
+docker-up: ## Run this module + base infra in containers
+	cd ../.. && docker compose -f infra/docker-compose.base.yml -f modules/$(MODULE_NAME)/docker-compose.module.yml up -d --build
+
+docker-down: ## Stop this module's containers
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml down
+
+docker-logs: ## Tail container logs
+	cd ../.. && docker compose -f modules/$(MODULE_NAME)/docker-compose.module.yml logs -f
 
 clean: ## Remove caches and build artifacts
 	rm -rf __pycache__ .pytest_cache .ruff_cache .mypy_cache *.egg-info build dist
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-.PHONY: help install run run-mock test test-cov lint fmt migrate pipeline pipeline-full build clean
+.PHONY: help install run run-mock test test-cov lint fmt migrate pipeline pipeline-full docker-pipeline docker-pipeline-full build docker-up docker-down docker-logs clean

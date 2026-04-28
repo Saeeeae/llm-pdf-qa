@@ -18,9 +18,29 @@ _REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 _CHANNELS = ["audit_events", "pipeline_events"]
 
 
+def _extract_token(ws: WebSocket) -> str:
+    """
+    Extract bearer token without leaking it to access logs.
+    Order: Authorization header → Sec-WebSocket-Protocol subprotocol →
+    ?token= query param (only if WS_ALLOW_QUERY_TOKEN=1, default off).
+    """
+    auth = ws.headers.get("authorization", "")
+    if auth:
+        return auth.removeprefix("Bearer ").strip()
+    # Sec-WebSocket-Protocol can carry "bearer, <token>" from browsers.
+    proto = ws.headers.get("sec-websocket-protocol", "")
+    if proto:
+        parts = [p.strip() for p in proto.split(",") if p.strip()]
+        if len(parts) >= 2 and parts[0].lower() == "bearer":
+            return parts[1]
+    if os.getenv("WS_ALLOW_QUERY_TOKEN") == "1":
+        return ws.query_params.get("token", "")
+    return ""
+
+
 @router.websocket("/admin/ws")
 async def admin_ws(ws: WebSocket):
-    token = ws.query_params.get("token") or ws.headers.get("authorization", "").removeprefix("Bearer ")
+    token = _extract_token(ws)
     try:
         payload = decode_token(token)
         perms = payload.get("permissions") or payload.get("perm", [])

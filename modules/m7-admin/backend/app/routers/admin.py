@@ -3,7 +3,6 @@ admin.py — M7 Admin API router.
 All endpoints require appropriate permissions (verified via JWT from M1/M5).
 """
 import asyncio
-import io
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -15,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from jose import jwt
 
-from ..auth import current_user, require_permission, _SECRET as _JWT_SECRET
+from ..auth import require_permission, _SECRET as _JWT_SECRET
 from ..cache import cache_get, cache_set
 from ..db import get_db, check_db_connectivity
 
@@ -45,15 +44,20 @@ async def audit_log(
     db=Depends(get_db),
     _: dict = Depends(require_permission("audit.read")),
 ):
-    from sqlalchemy import text, select, func, column, table
+    from sqlalchemy import text
 
+    # m1 schema uses `ts` (not `created_at`) and a single `resource` column.
+    # We alias them to keep the JSON contract stable for downstream consumers.
     offset = (page - 1) * size
     base = (
-        "SELECT id, user_id, action, resource_type, resource_id, created_at, metadata "
+        "SELECT id, user_id, action, "
+        "resource AS resource_type, NULL::text AS resource_id, "
+        "ts AS created_at, metadata "
         "FROM audit_log WHERE 1=1"
     )
     count_base = "SELECT COUNT(*) FROM audit_log WHERE 1=1"
-    conds, params = [], {}
+    conds: list[str] = []
+    params: dict = {}
     if user_id:
         conds.append(" AND user_id = :user_id")
         params["user_id"] = user_id
@@ -61,15 +65,15 @@ async def audit_log(
         conds.append(" AND action = :action")
         params["action"] = action
     if from_:
-        conds.append(" AND created_at >= :from_ts")
+        conds.append(" AND ts >= :from_ts")
         params["from_ts"] = from_
     if to:
-        conds.append(" AND created_at <= :to_ts")
+        conds.append(" AND ts <= :to_ts")
         params["to_ts"] = to
 
     suffix = "".join(conds)
     rows = await db.execute(
-        text(base + suffix + " ORDER BY created_at DESC LIMIT :limit OFFSET :offset"),
+        text(base + suffix + " ORDER BY ts DESC LIMIT :limit OFFSET :offset"),
         {**params, "limit": size, "offset": offset},
     )
     count_row = await db.execute(text(count_base + suffix), params)
@@ -89,13 +93,23 @@ async def list_users(
 ):
     from sqlalchemy import text
 
-    base = "SELECT user_id, email, name, role, department, is_active, last_login_at FROM users WHERE 1=1"
+    # m1 schema uses normalized FKs (role_id, department_id). Join the lookup
+    # tables and project the human-readable names.
+    base = (
+        "SELECT u.id AS user_id, u.email, u.name, "
+        "       r.name AS role, d.name AS department, "
+        "       u.is_active, u.last_login_at "
+        "FROM users u "
+        "LEFT JOIN roles r ON u.role_id = r.id "
+        "LEFT JOIN department d ON u.department_id = d.id "
+        "WHERE 1=1"
+    )
     conds, params = [], {}
     if role:
-        conds.append(" AND role = :role")
+        conds.append(" AND r.name = :role")
         params["role"] = role
     if department:
-        conds.append(" AND department = :department")
+        conds.append(" AND d.name = :department")
         params["department"] = department
 
     rows = await db.execute(text(base + "".join(conds) + " ORDER BY email"), params)
@@ -255,14 +269,14 @@ async def logs_query(
 
     rows = await db.execute(
         text(
-            "SELECT al.id, al.user_id, u.email, al.created_at, "
+            "SELECT al.id, al.user_id, u.email, al.ts AS created_at, "
             "al.metadata->>'latency_ms' AS latency_ms, "
             "al.metadata->>'status' AS status, "
             "al.metadata->>'query' AS query "
             "FROM audit_log al "
-            "LEFT JOIN users u ON u.user_id = al.user_id "
+            "LEFT JOIN users u ON u.id = al.user_id "
             "WHERE al.action = 'chat.query' "
-            "ORDER BY al.created_at DESC LIMIT :limit"
+            "ORDER BY al.ts DESC LIMIT :limit"
         ),
         {"limit": limit},
     )
@@ -281,14 +295,14 @@ async def pipeline_runs(
 
     rows = await db.execute(
         text(
-            "SELECT id, user_id, created_at, "
+            "SELECT id, user_id, ts AS created_at, "
             "metadata->>'doc_count' AS doc_count, "
             "metadata->>'duration_s' AS duration_s, "
             "metadata->>'failures' AS failures, "
             "metadata->>'status' AS status "
             "FROM audit_log "
             "WHERE action = 'pipeline.run' "
-            "ORDER BY created_at DESC LIMIT :limit"
+            "ORDER BY ts DESC LIMIT :limit"
         ),
         {"limit": limit},
     )
@@ -375,9 +389,9 @@ async def impersonate(
     # Verify target user exists and fetch their role permissions
     row = await db.execute(
         text(
-            "SELECT u.user_id, u.email, u.role, r.permissions "
-            "FROM users u LEFT JOIN roles r ON r.name = u.role "
-            "WHERE u.user_id = :uid"
+            "SELECT u.id AS user_id, u.email, r.name AS role, r.permissions "
+            "FROM users u LEFT JOIN roles r ON r.id = u.role_id "
+            "WHERE u.id = :uid"
         ),
         {"uid": user_id},
     )
@@ -386,7 +400,8 @@ async def impersonate(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Issue short-lived (10 min) impersonation token
-    import time, json as _json2
+    import time
+    import json as _json2
     raw_perms = target["permissions"]
     perms: list = raw_perms if isinstance(raw_perms, list) else (_json2.loads(raw_perms) if raw_perms else [])
     payload = {
@@ -403,15 +418,19 @@ async def impersonate(
 
     # Audit log the impersonation
     import json as _json
+    # m1.audit_log has a single `resource` column; encode the target user id into it.
     await db.execute(
         text(
-            "INSERT INTO audit_log (user_id, action, resource_type, resource_id, metadata) "
-            "VALUES (:uid, 'admin.impersonate', 'user', :target_id, :meta::jsonb)"
+            "INSERT INTO audit_log (user_id, action, resource, metadata) "
+            "VALUES (:uid, 'admin.impersonate', :target_resource, :meta::jsonb)"
         ),
         {
             "uid": actor.get("sub"),
-            "target_id": user_id,
-            "meta": _json.dumps({"actor": str(actor.get("sub"))}),
+            "target_resource": f"user:{user_id}",
+            "meta": _json.dumps({
+                "actor": str(actor.get("sub")),
+                "target_user_id": user_id,
+            }),
         },
     )
     await db.commit()
@@ -432,8 +451,14 @@ async def export_audit_log_csv(
 ):
     from sqlalchemy import text
 
-    base = "SELECT id, user_id, action, resource_type, resource_id, created_at FROM audit_log WHERE 1=1"
-    conds, params = [], {}
+    base = (
+        "SELECT id, user_id, action, "
+        "resource AS resource_type, NULL::text AS resource_id, "
+        "ts AS created_at "
+        "FROM audit_log WHERE 1=1"
+    )
+    conds: list[str] = []
+    params: dict = {}
     if user_id:
         conds.append(" AND user_id = :user_id")
         params["user_id"] = user_id
@@ -441,13 +466,13 @@ async def export_audit_log_csv(
         conds.append(" AND action = :action")
         params["action"] = action
     if from_:
-        conds.append(" AND created_at >= :from_ts")
+        conds.append(" AND ts >= :from_ts")
         params["from_ts"] = from_
     if to:
-        conds.append(" AND created_at <= :to_ts")
+        conds.append(" AND ts <= :to_ts")
         params["to_ts"] = to
 
-    rows = await db.execute(text(base + "".join(conds) + " ORDER BY created_at DESC"), params)
+    rows = await db.execute(text(base + "".join(conds) + " ORDER BY ts DESC"), params)
     records = rows.fetchall()
 
     def generate():

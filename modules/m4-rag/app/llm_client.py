@@ -14,7 +14,7 @@ MAX_CONTEXT_TOKENS = int(os.getenv("MAX_CONTEXT_TOKENS", "6000"))
 class CB:
     def __init__(self, threshold: int = 5, recovery: int = 30):
         self.fails = 0
-        self.opened_at = 0
+        self.opened_at: float = 0.0
         self.threshold = threshold
         self.recovery = recovery
 

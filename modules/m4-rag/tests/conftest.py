@@ -4,7 +4,7 @@ os.environ["JWT_SECRET"] = "test-secret"
 os.environ["VLLM_URL"] = "http://vllm-test:8000/v1"
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 @pytest.fixture(autouse=True)
