@@ -1,19 +1,18 @@
 import hashlib
 import os
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import redis.asyncio as aioredis
 from argon2 import PasswordHasher
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import log_event
-from ..auth.jwt import create_access_token, decode_token, get_current_user
+from ..auth.jwt import create_access_token, get_current_user
 from ..auth.password import verify_password
 from ..db import get_db
 from ..models import RefreshToken, User
@@ -73,7 +72,7 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
         except Exception:
             pass
 
-    result = await db.execute(select(User).where(User.email == body.email, User.is_active == True))
+    result = await db.execute(select(User).where(User.email == body.email, User.is_active.is_(True)))
     user = result.scalar_one_or_none()
 
     def _fail():
@@ -157,7 +156,7 @@ async def refresh(body: RefreshRequest, request: Request, db: AsyncSession = Dep
     rt.revoked = True
     await db.commit()
 
-    user_result = await db.execute(select(User).where(User.id == rt.user_id, User.is_active == True))
+    user_result = await db.execute(select(User).where(User.id == rt.user_id, User.is_active.is_(True)))
     user = user_result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")

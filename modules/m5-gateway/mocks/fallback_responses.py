@@ -11,6 +11,5 @@ _FALLBACKS = {
 
 
 def get_fallback(target: str) -> httpx.Response:
-    import json
     payload = _FALLBACKS.get(target, {"status": "fallback", "service": target})
     return httpx.Response(200, json=payload)

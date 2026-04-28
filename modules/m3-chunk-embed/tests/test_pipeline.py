@@ -3,9 +3,6 @@ Integration-style tests for the /chunk-embed and /status endpoints.
 Uses AsyncMock for DB and mock Embedder/Chunker (injected by conftest.py).
 No real DB or GPU required.
 """
-import asyncio
-import hashlib
-import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.testclient import TestClient
@@ -66,7 +63,6 @@ def test_status_not_found():
 
 def test_status_found():
     from app.main import app
-    from fastapi import Depends
 
     async def _fake_db():
         session = AsyncMock()

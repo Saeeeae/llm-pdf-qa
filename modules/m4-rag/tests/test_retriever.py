@@ -1,5 +1,4 @@
 """RRF fusion logic unit tests (no real DB needed)."""
-import pytest
 
 
 def _make_row(id_, doc_id, chunk_idx, text, score):

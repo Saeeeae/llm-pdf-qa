@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .source_rows import SourceDepartment, SourceRole, SourceUser
@@ -172,7 +172,7 @@ async def _sync_users(session: AsyncSession, source) -> tuple[int, int, int]:
 
     # Deactivate users that disappeared from MySQL
     result = await session.execute(
-        select(User).where(User.external_id.isnot(None), User.is_active == True)
+        select(User).where(User.external_id.isnot(None), User.is_active.is_(True))
     )
     deactivated = 0
     for user in result.scalars():

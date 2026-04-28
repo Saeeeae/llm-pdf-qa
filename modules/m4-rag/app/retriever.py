@@ -191,7 +191,7 @@ async def expand_to_parents(db: AsyncSession, leaves: List[Dict]) -> List[Dict]:
     if not leaves:
         return []
 
-    parent_ids = [l["parent_id"] for l in leaves if l.get("parent_id") is not None]
+    parent_ids = [leaf["parent_id"] for leaf in leaves if leaf.get("parent_id") is not None]
     parents_by_id: Dict[int, Dict] = {}
     if parent_ids:
         rows = (

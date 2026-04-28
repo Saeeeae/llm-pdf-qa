@@ -1,7 +1,6 @@
 """test_ws.py — WebSocket admin events endpoint."""
 import json
 import os
-import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest

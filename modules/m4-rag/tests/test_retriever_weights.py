@@ -1,6 +1,4 @@
 """B2.3 — Retriever RRF weights + RRF_K environment variable tests."""
-import os
-import pytest
 import importlib
 
 

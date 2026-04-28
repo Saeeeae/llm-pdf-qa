@@ -1,6 +1,5 @@
 """Unit tests for Embedder using a mock SentenceTransformer — no GPU needed."""
 import numpy as np
-import pytest
 
 
 class _FakeSentenceTransformer:

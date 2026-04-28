@@ -1,7 +1,5 @@
-import os
 from pathlib import Path
 
-import pytest
 
 from app.pipeline.scanner import scan
 
@@ -63,7 +61,7 @@ def test_unsupported_extension_skipped(tmp_path):
 def test_incremental_state_unchanged(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    p = _make_pdf(source / "doc.pdf")
+    _make_pdf(source / "doc.pdf")
     result1 = scan(source, {})
     state = {"files": result1["current"]}
     result2 = scan(source, state)

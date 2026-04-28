@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Optional
 
 TTL = int(os.getenv("SESSION_TTL", "3600"))
 MAX_TURNS = 5

@@ -100,7 +100,7 @@ def test_chunk_short_text_single_section():
     assert len(parents) >= 1
     assert len(leaves) >= 1
     assert all(isinstance(p, ParentChunk) for p in parents)
-    assert all(isinstance(l, LeafChunk) for l in leaves)
+    assert all(isinstance(leaf, LeafChunk) for leaf in leaves)
 
 
 def test_chunk_long_text_multiple_chunks():
@@ -116,7 +116,7 @@ def test_chunk_with_headings_propagates_heading_path():
     md = "# Top\nABCDEFGHIJ\n## Sub\nKLMNOPQR"
     parents, leaves = c.chunk(md)
     paths_p = {p.metadata.get("heading_path") for p in parents}
-    paths_l = {l.metadata.get("heading_path") for l in leaves}
+    paths_l = {leaf.metadata.get("heading_path") for leaf in leaves}
     # Both `Top` and `Top > Sub` should appear at parent and leaf level.
     assert "Top" in paths_p
     assert "Top > Sub" in paths_p
@@ -127,10 +127,10 @@ def test_chunk_with_headings_propagates_heading_path():
 def test_chunk_leaf_hash_uniqueness():
     c = _make_chunker(parent_size=20, parent_overlap=2, leaf_size=4, leaf_overlap=0)
     _, leaves = c.chunk("abcdefghijklmnopqrstuvwxyz")
-    hashes = [l.chunk_hash for l in leaves]
+    hashes = [leaf.chunk_hash for leaf in leaves]
     assert len(hashes) == len(set(hashes))
-    for l in leaves:
-        assert l.chunk_hash == hashlib.sha256(l.text.encode()).hexdigest()
+    for leaf in leaves:
+        assert leaf.chunk_hash == hashlib.sha256(leaf.text.encode()).hexdigest()
 
 
 def test_chunk_leaf_parent_idx_in_range():

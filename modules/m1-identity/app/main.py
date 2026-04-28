@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from rag_shared.logging import setup_logging
 
-from .db import get_db, init_db
+from .db import init_db
 from .middleware import RequestIDMiddleware
 from .routers import auth, users
 from .routers import sync as sync_router

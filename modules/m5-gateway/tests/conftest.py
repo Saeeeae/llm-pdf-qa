@@ -4,7 +4,6 @@ os.environ["M1_URL"] = "http://mock-m1"
 os.environ["M4_URL"] = "http://mock-m4"
 os.environ["DOWNSTREAM_FALLBACK"] = "mock"
 
-import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from jose import jwt

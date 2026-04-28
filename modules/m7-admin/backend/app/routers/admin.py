@@ -3,7 +3,6 @@ admin.py — M7 Admin API router.
 All endpoints require appropriate permissions (verified via JWT from M1/M5).
 """
 import asyncio
-import io
 import os
 import subprocess
 from datetime import datetime, timezone
@@ -15,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from jose import jwt
 
-from ..auth import current_user, require_permission, _SECRET as _JWT_SECRET
+from ..auth import require_permission, _SECRET as _JWT_SECRET
 from ..cache import cache_get, cache_set
 from ..db import get_db, check_db_connectivity
 
@@ -45,7 +44,7 @@ async def audit_log(
     db=Depends(get_db),
     _: dict = Depends(require_permission("audit.read")),
 ):
-    from sqlalchemy import text, select, func, column, table
+    from sqlalchemy import text
 
     # m1 schema uses `ts` (not `created_at`) and a single `resource` column.
     # We alias them to keep the JSON contract stable for downstream consumers.
@@ -400,7 +399,8 @@ async def impersonate(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     # Issue short-lived (10 min) impersonation token
-    import time, json as _json2
+    import time
+    import json as _json2
     raw_perms = target["permissions"]
     perms: list = raw_perms if isinstance(raw_perms, list) else (_json2.loads(raw_perms) if raw_perms else [])
     payload = {

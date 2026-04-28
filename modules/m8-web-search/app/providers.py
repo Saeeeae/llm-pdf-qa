@@ -59,7 +59,7 @@ class CuratedBioProvider(SearchProvider):
             ),
             SearchResult(
                 title=f"openFDA search: {safe_query}",
-                url=f"https://open.fda.gov/apis/",
+                url="https://open.fda.gov/apis/",
                 snippet="openFDA public API index for drug, device, food, and safety datasets.",
                 source="openfda",
                 fetched_at=now,

@@ -1,4 +1,3 @@
-import os
 from fastapi import FastAPI
 
 app = FastAPI(title="M1 Identity Mock", version="0.1.0")

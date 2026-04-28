@@ -20,7 +20,7 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 _MODEL_NAME = os.getenv("CHUNK_TOKENIZER", os.getenv("EMBED_MODEL", "BAAI/bge-m3"))
 

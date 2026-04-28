@@ -1,6 +1,5 @@
 """Router tests — TestClient with monkeypatched LLM client and retriever."""
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from app.main import app

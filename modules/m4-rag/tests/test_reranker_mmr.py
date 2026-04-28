@@ -125,8 +125,9 @@ def test_hybrid_search_skips_mmr_when_lambda_one(monkeypatch):
         ]
 
     async def fake_expand(db, leaves):
-        return [dict(l, text=l["text"], leaf_text=l["text"], leaf_ids=[l["id"]],
-                     score=l.get("rrf", 0.0)) for l in leaves]
+        return [dict(leaf, text=leaf["text"], leaf_text=leaf["text"],
+                     leaf_ids=[leaf["id"]], score=leaf.get("rrf", 0.0))
+                for leaf in leaves]
 
     monkeypatch.setattr(r, "retrieve", fake_retrieve)
     monkeypatch.setattr(r, "expand_to_parents", fake_expand)
