@@ -2,9 +2,9 @@
 db.py — async SQLAlchemy engine for M7 admin backend.
 
 Source URL resolution order:
-  1. POSTGRES_RO_URL     — preferred read-only replica (asyncpg)
-  2. POSTGRES_ASYNC_URL  — async-explicit URL (asyncpg)
-  3. POSTGRES_URL        — common project URL; auto-converted from psycopg → asyncpg
+  1. POSTGRES_RO_URL  — preferred read-only replica (asyncpg)
+  2. POSTGRES_ASYNC_URL — async-explicit URL (asyncpg)
+  3. POSTGRES_URL     — common project URL; auto-converted from psycopg → asyncpg
 
 Engine is created lazily on first use so import works even when env vars
 are absent (tests, CI).
