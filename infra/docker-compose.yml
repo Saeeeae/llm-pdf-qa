@@ -131,7 +131,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - audit_logs:/var/log/rag-audit
+      - ${LOG_DIR:-./data/logs}/m8-web-search:/var/log/rag-audit
     environment:
       M8_AUDIT_LOG: /var/log/rag-audit/m8-web-search.jsonl
     healthcheck:
@@ -140,10 +140,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-
-volumes:
-  audit_logs:
-    driver: local
 
 networks:
   ragnet:

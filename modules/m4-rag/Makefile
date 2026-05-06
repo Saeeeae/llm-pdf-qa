@@ -1,45 +1,39 @@
-# Module Makefile - m4-rag
-PY ?= python3
-PIP ?= pip
-PORT ?= 8004
-MODULE_NAME = m4-rag
+# Module Makefile - m4-rag (docker-based)
+MODULE := m4-rag
+ROOT := $(shell git rev-parse --show-toplevel)
+export ROOT
+
+DATA_DIR := $(ROOT)/data/db
+LOG_DIR := $(ROOT)/data/logs
+export DATA_DIR
+export LOG_DIR
+
+DC := docker compose \
+      --env-file=$(ROOT)/.env \
+      -f $(ROOT)/infra/docker-compose.base.yml \
+      -f $(ROOT)/modules/$(MODULE)/docker-compose.module.yml
 
 .DEFAULT_GOAL := help
 
-help: ## Show available targets
-	@awk 'BEGIN{FS=":.*?## "} /^[a-zA-Z0-9_.-]+:.*?## .*/ {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-
-install: ## Install module + shared-py (editable)
-	$(PIP) install --break-system-packages -e ../../packages/shared-py
-	$(PIP) install --break-system-packages -e .
-
-run: ## Run uvicorn (real mode)
-	MODULE_IMPL=real uvicorn app.main:app --host 0.0.0.0 --port $(PORT) --reload
-
-run-mock: ## Run uvicorn (mock mode)
-	MODULE_IMPL=mock uvicorn app.main:app --host 0.0.0.0 --port $(PORT) --reload
-
-test: ## Run pytest
-	TEST_MODE=1 $(PY) -m pytest tests/ -v
-
-test-cov: ## Run pytest with coverage
-	TEST_MODE=1 $(PY) -m pytest tests/ -v --cov=app --cov-report=term-missing
-
-lint: ## ruff check + mypy
-	ruff check app/ tests/
-	mypy app/ --ignore-missing-imports --no-strict-optional
-
-fmt: ## ruff format
-	ruff format app/ tests/
-
-migrate: ## no alembic in this module
-	@echo "no alembic"
+help: ## Show targets
+	@awk 'BEGIN{FS=":.*?## "} /^[a-zA-Z0-9_.-]+:.*?## .*/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 build: ## Build docker image
-	docker build -t rag-$(MODULE_NAME):local .
+	$(DC) build $(MODULE)
 
-clean: ## Remove caches and build artifacts
-	rm -rf __pycache__ .pytest_cache .ruff_cache .mypy_cache *.egg-info build dist
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+run: ## Start service + dependencies
+	$(DC) up -d $(MODULE)
 
-.PHONY: help install run run-mock test test-cov lint fmt migrate build clean
+stop: ## Stop service (volumes kept)
+	$(DC) stop $(MODULE)
+
+remove: ## Stop + remove containers and volumes
+	$(DC) down -v
+
+log: ## Tail service logs
+	$(DC) logs -f $(MODULE)
+
+test: ## Run pytest in a one-shot container
+	$(DC) run --rm $(MODULE) python -m pytest tests/ -v
+
+.PHONY: help build run stop remove log test

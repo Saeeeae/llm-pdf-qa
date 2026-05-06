@@ -5,10 +5,13 @@ services:
       dockerfile: modules/m8-web-search/Dockerfile
     ports:
       - "8108:8000"
-    env_file: .env.example
+    env_file:
+      - ${ROOT}/.env
     environment:
       MODULE_IMPL: ${MODULE_IMPL:-real}
       M8_DEFAULT_PROVIDER: ${M8_DEFAULT_PROVIDER:-curated}
+    volumes:
+      - ${LOG_DIR:-./data/logs}/m8-web-search:/var/log/m8-web-search
     networks:
       - ragnet
       - web_egress
