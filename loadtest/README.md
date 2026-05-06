@@ -1,5 +1,7 @@
 # Load Testing — RAG-LLM
 
+Locust scenarios. Run from the host (locust is not part of the docker stack).
+
 ## Prerequisites
 
 ```bash
@@ -11,39 +13,30 @@ pip install locust pandas matplotlib
 | Variable    | Default      | Description                  |
 |-------------|--------------|------------------------------|
 | `LOAD_JWT`  | `test-token` | Bearer token for API calls   |
-| `LOAD_HOST` | —            | Target base URL (Makefile)   |
+| `LOAD_HOST` | —            | Target base URL              |
 
 ## Scenarios
 
 ### Sustained (30 min, 100 users)
 
 ```bash
-locust -f loadtest/locustfile.py --host=http://localhost:8000 \
+locust -f loadtest/locustfile.py --host=$LOAD_HOST \
   -u 100 -r 10 -t 30m --headless --csv=loadtest/results/sustained
-```
-
-Or via Make:
-
-```bash
-LOAD_HOST=http://localhost:8000 make load-test
 ```
 
 ### Spike (0 → 200 over 30 s)
 
 ```bash
-locust -f loadtest/scenarios/spike.py --host=http://localhost:8000 \
+locust -f loadtest/scenarios/spike.py --host=$LOAD_HOST \
   --headless --csv=loadtest/results/spike
 ```
 
-Or via Make:
-
-```bash
-LOAD_HOST=http://localhost:8000 make load-spike
-```
+> Note: previous Make targets `make load-test` / `make load-spike` were
+> retired in the docker-only Makefile refactor. Run locust directly as
+> shown above. Target the gateway (`http://localhost:8080`) for end-to-end
+> measurement, or a specific module port for isolation.
 
 ## Analyze Results
-
-After a run, generate a latency chart:
 
 ```bash
 python loadtest/analyze.py loadtest/results/sustained

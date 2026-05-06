@@ -2,14 +2,22 @@
 
 Next.js 14 (app router) chat interface. Port **3000**.
 
+> Frontend modules (m6, m7-admin/frontend) are currently **npm-based** —
+> they do not have a `docker-compose.module.yml` yet. The standard
+> docker-only `make build/run/...` flow used by m1-m5/m8 does not apply
+> here. A future task will containerize the FE; until then, run via npm
+> directly (or via the production multi-stage Dockerfile shipped with
+> the module).
+
 ## Purpose
 
 End-user chat UI that streams responses from M5 Gateway (`/api/v1/chat` SSE).
 Handles auth via httpOnly refresh cookie + in-memory access token.
 
-## Dev
+## Dev (local npm)
 
 ```bash
+cd modules/m6-ui
 npm install
 npm run dev        # http://localhost:3000
 ```
@@ -34,12 +42,13 @@ Set-Cookie: refresh_token=<token>; HttpOnly; Secure; SameSite=Lax; Path=/api/v1/
 ```
 The browser sends this cookie automatically on `POST /api/v1/auth/refresh`.
 
-## Production build
+## Production build (Docker, run manually)
 
 ```bash
-npm run build      # outputs .next/standalone for Docker
+docker build -t rag-m6-ui:local -f modules/m6-ui/Dockerfile modules/m6-ui
+docker run -p 3000:3000 rag-m6-ui:local
 ```
-Dockerfile: multi-stage (deps → build → slim runner). Image runs `node server.js`.
+Multi-stage Dockerfile (deps → build → slim runner) outputs `node server.js` runtime.
 
 ## Testing
 
