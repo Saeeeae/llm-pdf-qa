@@ -67,6 +67,10 @@ async def _bg_sync(run_id: int):
         )
         await session.commit()
 
+    if status == "success":
+        from ..sync.notify import trigger_m2
+        await trigger_m2()
+
 
 @router.get("/status")
 async def sync_status(
