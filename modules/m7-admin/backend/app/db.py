@@ -1,8 +1,13 @@
 """
 db.py — async SQLAlchemy engine for M7 admin backend.
-Uses read-only credentials (POSTGRES_RO_URL) when available,
-falls back to POSTGRES_URL. Engine is created lazily on first use
-so import works even when env vars are absent (tests, CI).
+
+Source URL resolution order:
+  1. POSTGRES_RO_URL  — preferred read-only replica (asyncpg)
+  2. POSTGRES_ASYNC_URL — async-explicit URL (asyncpg)
+  3. POSTGRES_URL     — common project URL; auto-converted from psycopg → asyncpg
+
+Engine is created lazily on first use so import works even when env vars
+are absent (tests, CI).
 """
 import os
 from typing import Optional, AsyncGenerator
@@ -19,7 +24,11 @@ _session_factory: Optional[async_sessionmaker] = None
 
 
 def _make_async_url() -> str:
-    raw = os.getenv("POSTGRES_RO_URL") or os.getenv("POSTGRES_URL", "")
+    raw = (
+        os.getenv("POSTGRES_RO_URL")
+        or os.getenv("POSTGRES_ASYNC_URL")
+        or os.getenv("POSTGRES_URL", "")
+    )
     if not raw:
         # Fallback so SQLAlchemy doesn't error at import time
         return "postgresql+asyncpg://postgres:postgres@localhost:5432/ragdb"
