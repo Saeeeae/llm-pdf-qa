@@ -4,28 +4,41 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from rag_shared.logging import setup_logging
 
+from .admin_bootstrap import maybe_bootstrap_admin
 from .db import get_db, init_db
 from .middleware import RequestIDMiddleware
-from .routers import auth, users
+from .routers import admin, auth, users
 from .routers import sync as sync_router
 
-setup_logging("m1-identity")
+# LOG_FILE_PATH env enables a rotating file handler in addition to stdout.
+# In docker, this path is bind-mounted to the host's data/logs/m1-identity/.
+setup_logging("m1-identity", log_file=os.getenv("LOG_FILE_PATH"))
 
 _scheduler = None
+_startup_sync_task = None  # tracked so lifespan can cancel it cleanly
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _scheduler
+    global _scheduler, _startup_sync_task
     if os.getenv("TEST_MODE", "0") == "1":
         await init_db()
-    else:
-        from .sync.scheduler import start_scheduler, _run_locked_sync
+    # Auto-bootstrap an admin user when env is set and no admin exists yet.
+    # Idempotent so re-deploys are safe; errors are logged not raised.
+    await maybe_bootstrap_admin()
+    if os.getenv("TEST_MODE", "0") != "1":
+        from .sync.scheduler import run_locked_sync, start_scheduler
         _scheduler = start_scheduler()
         if os.getenv("MYSQL_SYNC_ON_STARTUP", "0") == "1":
             import asyncio
-            asyncio.ensure_future(_run_locked_sync())
+            _startup_sync_task = asyncio.create_task(run_locked_sync())
     yield
+    if _startup_sync_task and not _startup_sync_task.done():
+        _startup_sync_task.cancel()
+        try:
+            await _startup_sync_task
+        except (Exception, BaseException):
+            pass
     if _scheduler:
         _scheduler.shutdown(wait=False)
 
@@ -36,6 +49,7 @@ app.add_middleware(RequestIDMiddleware)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(sync_router.router)
+app.include_router(admin.router)
 
 
 @app.get("/health")
@@ -57,7 +71,7 @@ async def ready():
 
     # Check Redis
     try:
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
         r = aioredis.from_url(redis_url)
         await r.ping()
         await r.aclose()
