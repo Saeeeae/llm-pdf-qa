@@ -3,7 +3,8 @@
 On-prem guarded web search service. M8 is the only module intended to have internet egress.
 All other modules should call web search through `M4 -> M8` or, for admin tooling, through `M5 -> M8`.
 
-- **Port**: 8108
+- **Port (host)**: 8108 → 8000 (container)
+- **Build**: `make build` &nbsp;·&nbsp; **Run**: `make run` &nbsp;·&nbsp; **Test**: `make test` &nbsp;·&nbsp; **Logs**: `make log`
 - **Default provider**: `curated` (offline deterministic bio-source citations)
 - **Optional providers**: `brave`, `exa`, `searxng`, `mock`
 
@@ -27,16 +28,16 @@ curl -X POST http://localhost:8108/web-search/search \
   -d '{"query":"p53 phase 2 clinical trial","provider":"curated","max_results":3}'
 ```
 
-## Make targets
+## CLI inside the container
+
+The previous module Makefile wrapped these as local-pytest entrypoints. With the docker-only Makefile, run them via `docker compose run`:
 
 ```bash
-make help
-make search-once Q="p53 phase 2 clinical trial" PROVIDER=curated
-make crawl-curated
-make crawl-allowlist DOMAINS=nih.gov,fda.gov
-make build              # Docker image (uses repo-root context)
-make docker-up          # run in container with audit log mounted to /data/logs
-make test
+docker compose run --rm m8-web-search python -m app.cli search \
+  --query "p53 phase 2 clinical trial" --provider curated
+docker compose run --rm m8-web-search python -m app.cli crawl-curated
+docker compose run --rm m8-web-search python -m app.cli crawl-allowlist \
+  --domains nih.gov,fda.gov
 ```
 
 ## Provider notes

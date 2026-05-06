@@ -2,14 +2,21 @@
 
 Next.js 14 admin dashboard. Port **3001**. Requires `admin.read` permission.
 
+> Frontend modules (m6, m7-admin/frontend) are currently **npm-based** —
+> they do not have a `docker-compose.module.yml` yet. The standard
+> docker-only `make build/run/...` flow used by m1-m5/m8 does not apply
+> here. A future task will containerize the FE; until then, run via npm
+> directly (or the production multi-stage Dockerfile).
+
 ## Purpose
 
 Admin UI for the RAG-LLM service. All API calls go through M5 Gateway at
 `NEXT_PUBLIC_ADMIN_API_BASE` → `/api/v1/admin/*` → M7 backend.
 
-## Dev
+## Dev (local npm)
 
 ```bash
+cd modules/m7-admin/frontend
 npm install
 npm run dev        # http://localhost:3001
 ```
@@ -34,12 +41,12 @@ npm run dev        # http://localhost:3001
 
 All pages use `force-dynamic` (no edge caching).
 
-## Production build
+## Production build (Docker, run manually)
 
 ```bash
-npm run build
+docker build -t rag-m7-admin-fe:local -f modules/m7-admin/frontend/Dockerfile modules/m7-admin/frontend
+docker run -p 3001:3001 rag-m7-admin-fe:local
 ```
-Dockerfile: multi-stage, slim runner image. Runs `node server.js` on port 3001.
 
 ## Notes
 
