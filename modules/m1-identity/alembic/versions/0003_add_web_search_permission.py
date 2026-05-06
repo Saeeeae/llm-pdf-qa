@@ -1,7 +1,7 @@
 """add web.search permission to admin and manager roles
 
-Revision ID: 0003_add_web_search_permission
-Revises: 0002_add_external_id
+Revision ID: 0003
+Revises: 0002
 Create Date: 2026-04-24
 """
 

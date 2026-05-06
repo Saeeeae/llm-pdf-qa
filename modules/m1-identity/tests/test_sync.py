@@ -158,6 +158,29 @@ async def test_sync_legacy_hash_upgrade(session):
 
 
 @pytest.mark.asyncio
+async def test_sync_sha1_legacy_hash_upgrade(session):
+    """In-house LOGIN_PWD is raw SHA1 hex → must verify and upgrade to argon2."""
+    import hashlib
+    sha1_hash = hashlib.sha1(b"secret123").hexdigest()  # 40-char hex
+
+    from app.auth.password import verify_password
+
+    ok, new_hash = verify_password("secret123", sha1_hash)
+    assert ok is True
+    assert new_hash is not None
+    assert new_hash.startswith("$argon2")
+
+    # Wrong password fails on the SHA1 path
+    ok2, new2 = verify_password("wrong", sha1_hash)
+    assert ok2 is False
+    assert new2 is None
+
+    # Uppercase hex variant still verifies (case-insensitive)
+    ok3, _ = verify_password("secret123", sha1_hash.upper())
+    assert ok3 is True
+
+
+@pytest.mark.asyncio
 async def test_sync_concurrent_lock(monkeypatch):
     """Second concurrent run is blocked when Redis lock is held."""
 

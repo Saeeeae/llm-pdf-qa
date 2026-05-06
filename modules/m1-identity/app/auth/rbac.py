@@ -16,22 +16,9 @@ class Permission(str, Enum):
     audit_read = "audit.read"
 
 
-# Default role permission sets (seeded via migration)
-ROLE_PERMISSIONS: dict[str, list[str]] = {
-    "admin": [p.value for p in Permission],
-    "manager": [
-        Permission.user_read.value,
-        Permission.doc_read.value,
-        Permission.doc_write.value,
-        Permission.chat_use.value,
-        Permission.admin_read.value,
-        Permission.audit_read.value,
-    ],
-    "user": [
-        Permission.doc_read.value,
-        Permission.chat_use.value,
-    ],
-}
+# Role → permissions mapping is the SQL seed in alembic/versions/0001_initial.py.
+# At login, app/routers/auth.py reads `user.role.permissions` directly from the
+# DB, so there is no Python-side ROLE_PERMISSIONS map to keep in sync.
 
 
 def require(*perms: Permission):
