@@ -3,8 +3,10 @@ MODULE := m8-web-search
 ROOT := $(shell git rev-parse --show-toplevel)
 export ROOT
 
-DATA_DIR := $(ROOT)/data/db
-LOG_DIR := $(ROOT)/data/logs
+DATA_ROOT ?= $(ROOT)/data
+DATA_DIR := $(DATA_ROOT)/db
+LOG_DIR := $(DATA_ROOT)/logs
+export DATA_ROOT
 export DATA_DIR
 export LOG_DIR
 

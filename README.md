@@ -88,26 +88,35 @@
 # 1. 저장소 클론
 git clone <this-repo-url> rag-llm && cd rag-llm
 
-# 2. 호스트 데이터 디렉토리 생성 (sudo 필요할 수 있음)
-sudo make data-init                            # /data, /data2 트리 생성
-sudo chown -R $(id -u):$(id -g) /data /data2   # 사용자 권한
+# 2. 호스트 데이터/로그 디렉토리 생성 (자동 chmod 777)
+make prepare
+# 운영 절대경로 오버라이드:
+# DATA_DIR=/mnt/nvme/rag/db LOG_DIR=/mnt/nvme/rag/logs make prepare
 
 # 3. 비밀 자동 생성 (JWT, PG, Neo4j)
-make secrets-init                              # infra/secrets/* 생성
+mkdir -p infra/secrets
+for n in jwt_secret postgres_password neo4j_password grafana_password; do
+  openssl rand -base64 48 > infra/secrets/$n
+  chmod 600 infra/secrets/$n
+done
 
 # 4. (선택) vLLM 별도 기동 — 3.7 참고. 안 띄워도 stack 자체는 동작하나
 #    채팅 응답이 503으로 떨어집니다.
 
-# 5. 전체 스택 빌드 + 기동 (단계 2,3을 자동으로 한 번 더 호출하므로 안전)
-make up
+# 5. 전체 스택 빌드 + 마이그레이션 + 기동
+make build
+make migrate                                   # 컨테이너 안에서 alembic — admin role 시드 포함
+make run                                       # prepare 자동 의존
 
-# 6. DB 스키마 (컨테이너 안에서 alembic 실행 — 호스트 Python 필요 없음)
-make migrate
+# 6. 첫 admin (BOOTSTRAP_ADMIN_*을 .env에 두지 않은 경우)
+cd modules/m1-identity
+make create-admin EMAIL=admin@example.com PASSWORD='strong-secret-32+chars'
+cd ../..
 
 # 7. 입력 문서 한 개 넣고 인덱싱
 sudo cp ~/path/to/sample.pdf /data2/sample.pdf
 sudo chown $(id -u):$(id -g) /data2/sample.pdf
-cd modules/m2-doc-to-md && make docker-pipeline   # /data2 → /data/markdown → m3 → embedding
+cd modules/m2-doc-to-md && make pipeline       # /data2 → /data/markdown → m3 → embedding
 
 # 8. 체크
 curl -f http://localhost:8080/health      # 게이트웨이
@@ -118,23 +127,24 @@ open http://localhost:3001                # 관리자 UI (admin.read 권한 필�
 
 ### 3.3 호스트 데이터 디렉토리 레이아웃
 
-영속 데이터는 호스트의 두 경로에 바인드 마운트됩니다:
+영속 데이터는 호스트의 경로에 바인드 마운트됩니다:
 
 | 경로 | 용도 |
 |------|------|
-| `DATA_ROOT` (기본 `/data`) | DB, 모델 캐시, 마크다운, state, 로그 |
-| `DATA2_ROOT` (기본 `/data2`) | 원본 입력 문서 (RO) |
+| `DATA_DIR` (기본 `<repo>/data/db`) | DB 영속 (postgres / neo4j / redis / m2-state) |
+| `LOG_DIR` (기본 `<repo>/data/logs`) | 모듈별 JSON 로그 (회전 10MB × 5) |
+| `DATA2_ROOT` (기본 `/data2`) | 원본 입력 문서 (RO, m2가 사용) |
 
 다른 경로를 쓰려면:
 ```bash
-DATA_ROOT=/mnt/nvme/rag DATA2_ROOT=/mnt/nas/docs make up
+DATA_DIR=/mnt/nvme/rag/db LOG_DIR=/mnt/nvme/rag/logs DATA2_ROOT=/mnt/nas/docs make run
 ```
 
-`make data-init`이 만드는 하위 트리:
+`make prepare`가 만드는 하위 트리:
 ```
-/data/db/{postgres,neo4j,redis}     /data/models     /data/markdown
-/data/state/m2                      /data/logs/{m2,m5,m7,m8}
-/data2/                             ← 여기에 PDF/DOCX 등을 넣음
+<repo>/data/db/{postgres,neo4j,redis,m2-state}
+<repo>/data/logs/{m1-identity,m2-doc-to-md,m3-chunk-embed,m4-rag,m5-gateway,m7-admin/backend,m8-web-search}
+/data2/                             ← 호스트가 직접 만들고 PDF/DOCX 등을 넣음 (RO 마운트)
 ```
 
 ### 3.4 첫 사용자 만들기

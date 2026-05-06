@@ -8,8 +8,13 @@
 ROOT := $(CURDIR)
 export ROOT
 
-DATA_DIR ?= $(ROOT)/data/db
-LOG_DIR ?= $(ROOT)/data/logs
+# DATA_ROOT is the SSOT (PR#1 vocab). DATA_DIR and LOG_DIR are derived
+# subdirs so module compose files using either var resolve consistently.
+# Override: DATA_ROOT=/mnt/nvme/rag make run
+DATA_ROOT ?= $(ROOT)/data
+DATA_DIR ?= $(DATA_ROOT)/db
+LOG_DIR ?= $(DATA_ROOT)/logs
+export DATA_ROOT
 export DATA_DIR
 export LOG_DIR
 
@@ -23,15 +28,14 @@ BASE := -f $(ROOT)/infra/docker-compose.base.yml
 MOCK := -f $(ROOT)/infra/docker-compose.mock.yml
 OBS := -f $(ROOT)/infra/docker-compose.observability.yml
 
-DATA_ROOT ?= /data
+# Read-only input documents (m2 source). Defaults to system /data2 (PR#1
+# convention). Override per-deploy: DATA2_ROOT=/mnt/nas/docs make run
 DATA2_ROOT ?= /data2
+export DATA2_ROOT
 
 BACKEND_MODS := m1-identity m2-doc-to-md m3-chunk-embed m4-rag m5-gateway m8-web-search m7-admin/backend
 FRONT_MODS := m6-ui m7-admin/frontend
 ALL_MODS := $(BACKEND_MODS) $(FRONT_MODS)
-
-# Compose service names (must match infra/docker-compose.yml)
-SERVICES := m1-identity m2-doc-to-md m3-chunk-embed m4-rag m5-gateway m6-ui m7-admin m7-admin-ui m8-web-search
 
 .DEFAULT_GOAL := help
 
@@ -42,11 +46,18 @@ help: ## Show targets
 	@echo "  Per-module:    cd modules/<m> && make help"
 
 # ─── Host data directories ─────────────────────────────────────────────────
-prepare: ## Create host data dirs (postgres/neo4j/redis/logs) with permissive perms
+prepare: ## Create host data dirs (db/models/markdown/state/logs) with permissive perms
 	@mkdir -p $(DATA_DIR)/postgres $(DATA_DIR)/neo4j $(DATA_DIR)/redis $(DATA_DIR)/m2-state
+	@mkdir -p $(DATA_ROOT)/models $(DATA_ROOT)/markdown $(DATA_ROOT)/state/m2
 	@for m in $(BACKEND_MODS); do mkdir -p $(LOG_DIR)/$$m; done
-	@chmod -R 777 $(DATA_DIR) $(LOG_DIR)
-	@echo "Host dirs ready: DATA_DIR=$(DATA_DIR) LOG_DIR=$(LOG_DIR)"
+	@chmod -R 777 $(DATA_ROOT)
+	@echo "Host dirs ready under: DATA_ROOT=$(DATA_ROOT)"
+	@echo "  ├ DB:       $(DATA_DIR)/{postgres,neo4j,redis,m2-state}"
+	@echo "  ├ Models:   $(DATA_ROOT)/models  (m3, m4 HF cache)"
+	@echo "  ├ Markdown: $(DATA_ROOT)/markdown  (m2 → m3)"
+	@echo "  ├ State:    $(DATA_ROOT)/state/m2"
+	@echo "  └ Logs:     $(LOG_DIR)/<module>"
+	@echo "  (Input docs: \$$DATA2_ROOT=$(DATA2_ROOT) — RO, host-managed)"
 
 # ─── Full stack ────────────────────────────────────────────────────────────
 build: ## Build all module images
