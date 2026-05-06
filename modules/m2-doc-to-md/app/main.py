@@ -1,7 +1,7 @@
 import os
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
-from .routers import ingest
+from .routers import ingest, sync
 
 app = FastAPI(title="M2 Doc-to-MD", version="0.1.0")
 
@@ -12,4 +12,5 @@ def health():
 
 
 app.include_router(ingest.router)
+app.include_router(sync.router)
 app.mount("/metrics", make_asgi_app())
