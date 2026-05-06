@@ -210,7 +210,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ${DATA_ROOT:-/data}/logs/m8:/data/logs
+      - ${LOG_DIR:-./data/logs}/m8-web-search:/var/log/rag-audit
     environment:
       M8_AUDIT_LOG: /data/logs/m8-web-search.jsonl
       REDIS_URL: ${M8_REDIS_URL:-redis://redis:6379/0}

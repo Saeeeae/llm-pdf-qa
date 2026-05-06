@@ -5,9 +5,13 @@ services:
       dockerfile: modules/m1-identity/Dockerfile
     ports:
       - "8101:8000"
-    env_file: .env.example
+    env_file:
+      - ${ROOT}/.env
     environment:
       MODULE_IMPL: ${MODULE_IMPL:-real}
+      LOG_FILE_PATH: /var/log/m1-identity/m1-identity.log
+    volumes:
+      - ${LOG_DIR:-./data/logs}/m1-identity:/var/log/m1-identity
     networks:
       - ragnet
 

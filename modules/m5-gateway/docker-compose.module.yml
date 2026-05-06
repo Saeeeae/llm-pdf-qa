@@ -5,9 +5,12 @@ services:
       dockerfile: modules/m5-gateway/Dockerfile
     ports:
       - "8080:8000"
-    env_file: .env.example
+    env_file:
+      - ${ROOT}/.env
     environment:
       MODULE_IMPL: ${MODULE_IMPL:-real}
+    volumes:
+      - ${LOG_DIR:-./data/logs}/m5-gateway:/var/log/m5-gateway
     networks:
       - ragnet
 
